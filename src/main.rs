@@ -3,7 +3,7 @@ use std::iter;
 
 use anyhow::{Context, Result};
 use log::debug;
-use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOutput};
+use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOption, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use serde_derive::{Deserialize, Serialize};
@@ -95,6 +95,9 @@ async fn render_handler(tail: Tail, db: Pool<Postgres>) -> Result<impl warp::Rep
     };
 
     let mut doc = pandoc::new();
+    doc.set_variable("title", &page.title);
+    // TODO(jsvana): config option?
+    doc.add_option(PandocOption::Template("assets/template.html".into()));
     doc.set_input_format(InputFormat::Markdown, Vec::new());
     doc.set_output_format(OutputFormat::Html, Vec::new());
     doc.set_input(InputKind::Pipe(page.body));
@@ -103,6 +106,7 @@ async fn render_handler(tail: Tail, db: Pool<Postgres>) -> Result<impl warp::Rep
         Ok(output) => output,
         Err(_) => {
             return Ok(warp::reply::with_status(
+                // TODO(jsvana): static page?
                 warp::reply::html("<html>Error</html>".to_string()),
                 StatusCode::INTERNAL_SERVER_ERROR,
             ));
@@ -113,6 +117,7 @@ async fn render_handler(tail: Tail, db: Pool<Postgres>) -> Result<impl warp::Rep
         PandocOutput::ToBuffer(buffer) => buffer,
         _ => {
             return Ok(warp::reply::with_status(
+                // TODO(jsvana): static page?
                 warp::reply::html("<html>Error</html>".to_string()),
                 StatusCode::INTERNAL_SERVER_ERROR,
             ));

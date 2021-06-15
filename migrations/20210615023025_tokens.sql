@@ -1,4 +1,5 @@
 CREATE TABLE tokens (
   token CHAR(64) NOT NULL,
-  user_id INT NOT NULL
+  user_id INT NOT NULL,
+  expiration INT NOT NULL
 );

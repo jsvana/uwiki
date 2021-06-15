@@ -1,0 +1,6 @@
+CREATE TABLE pages (
+  slug VARCHAR(256) NOT NULL PRIMARY KEY,
+  owner_id INT NOT NULL,
+  title VARCHAR(256) NOT NULL,
+  body TEXT NOT NULL
+);

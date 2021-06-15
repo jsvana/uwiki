@@ -77,12 +77,27 @@ pub async fn authenticate_handler(
     }
 }
 
-async fn render_handler(tail: Tail) -> Result<impl warp::Reply, Infallible> {
-    //format!("render {}", tail.as_str()))
+async fn render_handler(tail: Tail, db: Pool<Postgres>) -> Result<impl warp::Reply, Infallible> {
+    let page = match sqlx::query!(
+        "SELECT title, body FROM pages WHERE slug = $1",
+        tail.as_str()
+    )
+    .fetch_one(&db)
+    .await
+    {
+        Ok(page) => page,
+        Err(_) => {
+            return Ok(warp::reply::with_status(
+                warp::reply::html("<html>No such page</html>".to_string()),
+                StatusCode::NOT_FOUND,
+            ));
+        }
+    };
+
     let mut doc = pandoc::new();
     doc.set_input_format(InputFormat::Markdown, Vec::new());
     doc.set_output_format(OutputFormat::Html, Vec::new());
-    doc.set_input(InputKind::Pipe("# test\n**foo**".to_string()));
+    doc.set_input(InputKind::Pipe(page.body));
     doc.set_output(OutputKind::Pipe);
     let output = match doc.execute() {
         Ok(output) => output,
@@ -136,12 +151,13 @@ async fn main() -> Result<()> {
         .and(warp::path("authenticate"))
         .and(warp::body::content_length_limit(1024 * 16))
         .and(warp::body::json())
-        .and(with_db(pool))
+        .and(with_db(pool.clone()))
         .and_then(authenticate_handler);
 
     let render_wiki = warp::get()
         .and(warp::path("w"))
         .and(warp::path::tail())
+        .and(with_db(pool))
         .and_then(render_handler);
 
     warp::serve(authenticate.or(render_wiki))

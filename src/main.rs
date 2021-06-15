@@ -3,11 +3,14 @@ use std::iter;
 
 use anyhow::{Context, Result};
 use log::debug;
+use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use serde_derive::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
+use warp::http::StatusCode;
+use warp::path::Tail;
 use warp::Filter;
 
 #[derive(Serialize)]
@@ -74,6 +77,39 @@ pub async fn authenticate_handler(
     }
 }
 
+async fn render_handler(tail: Tail) -> Result<impl warp::Reply, Infallible> {
+    //format!("render {}", tail.as_str()))
+    let mut doc = pandoc::new();
+    doc.set_input_format(InputFormat::Markdown, Vec::new());
+    doc.set_output_format(OutputFormat::Html, Vec::new());
+    doc.set_input(InputKind::Pipe("# test\n**foo**".to_string()));
+    doc.set_output(OutputKind::Pipe);
+    let output = match doc.execute() {
+        Ok(output) => output,
+        Err(_) => {
+            return Ok(warp::reply::with_status(
+                warp::reply::html("<html>Error</html>".to_string()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ));
+        }
+    };
+
+    let buffer = match output {
+        PandocOutput::ToBuffer(buffer) => buffer,
+        _ => {
+            return Ok(warp::reply::with_status(
+                warp::reply::html("<html>Error</html>".to_string()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ));
+        }
+    };
+
+    Ok(warp::reply::with_status(
+        warp::reply::html(buffer),
+        StatusCode::OK,
+    ))
+}
+
 fn with_db(
     db: Pool<Postgres>,
 ) -> impl Filter<Extract = (Pool<Postgres>,), Error = std::convert::Infallible> + Clone {
@@ -105,8 +141,8 @@ async fn main() -> Result<()> {
 
     let render_wiki = warp::get()
         .and(warp::path("w"))
-        .and(warp::path::param())
-        .map(|path: String| format!("render {}", path));
+        .and(warp::path::tail())
+        .and_then(render_handler);
 
     warp::serve(authenticate.or(render_wiki))
         .run(([127, 0, 0, 1], 3030))

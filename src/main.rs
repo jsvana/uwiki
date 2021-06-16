@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use bcrypt::{hash, verify, DEFAULT_COST};
 use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOption, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
@@ -25,6 +26,11 @@ pub struct Config {
 #[derive(Serialize)]
 struct Token {
     token: String,
+}
+
+#[derive(Serialize)]
+struct AddUserResponse {
+    message: String,
 }
 
 #[derive(Deserialize)]
@@ -66,6 +72,36 @@ pub struct Credentials {
     password: String,
 }
 
+pub async fn add_user_handler(
+    credentials: Credentials,
+    db: Pool<Postgres>,
+) -> Result<impl warp::Reply, Infallible> {
+    let hashed_password = match hash(credentials.password, DEFAULT_COST) {
+        Ok(password) => password,
+        Err(e) => {
+            return Ok(warp::reply::json(&Error {
+                message: format!("Error hashing password: {}", e),
+            }));
+        }
+    };
+
+    match sqlx::query!(
+        "INSERT INTO users (username, password) VALUES ($1, $2)",
+        credentials.username,
+        hashed_password,
+    )
+    .execute(&db)
+    .await
+    {
+        Ok(_) => Ok(warp::reply::json(&AddUserResponse {
+            message: format!("Added user {}", credentials.username),
+        })),
+        Err(e) => Ok(warp::reply::json(&Error {
+            message: format!("Error adding user: {}", e),
+        })),
+    }
+}
+
 pub async fn authenticate_handler(
     credentials: Credentials,
     db: Pool<Postgres>,
@@ -80,21 +116,26 @@ pub async fn authenticate_handler(
         }
     };
 
-    let id = match sqlx::query!(
-        "SELECT id FROM users WHERE username = $1 AND hashed_password = $2",
+    let user = match sqlx::query!(
+        "SELECT id, password FROM users WHERE username = $1",
         credentials.username,
-        credentials.password
     )
     .fetch_one(&mut tx)
     .await
     {
-        Ok(user) => user.id,
+        Ok(user) => user,
         Err(_) => {
             return Ok(warp::reply::json(&Error {
                 message: "Invalid username or password".to_string(),
             }));
         }
     };
+
+    if let Ok(false) | Err(_) = verify(credentials.password, &user.password) {
+        return Ok(warp::reply::json(&Error {
+            message: "Invalid username or password".to_string(),
+        }));
+    }
 
     let token: String = {
         let mut rng = thread_rng();
@@ -127,7 +168,7 @@ pub async fn authenticate_handler(
 
     if let Err(e) = sqlx::query!(
         "INSERT INTO tokens (user_id, token, expiration) VALUES ($1, $2, $3)",
-        id,
+        user.id,
         token,
         expiration,
     )
@@ -420,8 +461,15 @@ async fn main() -> Result<()> {
         .connect(&config.database_url)
         .await?;
 
+    let add_user = warp::post()
+        .and(warp::path("u"))
+        .and(warp::body::content_length_limit(1024 * 16))
+        .and(warp::body::json())
+        .and(with_db(pool.clone()))
+        .and_then(add_user_handler);
+
     let authenticate = warp::post()
-        .and(warp::path("authenticate"))
+        .and(warp::path("a"))
         .and(warp::body::content_length_limit(1024 * 16))
         .and(warp::body::json())
         .and(with_db(pool.clone()))
@@ -449,9 +497,15 @@ async fn main() -> Result<()> {
         .and(with_db(pool))
         .and_then(set_page_handler);
 
-    warp::serve(authenticate.or(render_wiki).or(get_page).or(set_page))
-        .run(([127, 0, 0, 1], 3030))
-        .await;
+    warp::serve(
+        add_user
+            .or(authenticate)
+            .or(render_wiki)
+            .or(get_page)
+            .or(set_page),
+    )
+    .run(([127, 0, 0, 1], 3030))
+    .await;
 
     Ok(())
 }

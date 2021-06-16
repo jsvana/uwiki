@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
+bcrypt = "0.10"
 dotenv = "0.15"
 log = "0.4"
 pandoc = "0.8"

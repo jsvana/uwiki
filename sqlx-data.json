@@ -1,0 +1,189 @@
+{
+  "db": "PostgreSQL",
+  "032c9a9be764970aa6a9b3dd746c3050a22c91421aa3ee0b626f4d7911b8e04b": {
+    "query": "UPDATE pages SET title = $1, body = $2, rendered_body = $3, current_version = $4 WHERE slug = $5",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Text",
+          "Text",
+          "Int4",
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "385529c834075d014b051f7ffc7441443f8e8a652157f55c1daca6646eaa83f4": {
+    "query": "INSERT INTO tokens (user_id, token, expiration) VALUES ($1, $2, $3)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Bpchar",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "771f2a72d0a796e25f90e1837fc601593a7071e8d790fcda5dcf004caa95fb45": {
+    "query": "SELECT id, password FROM users WHERE username = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "password",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false
+      ]
+    }
+  },
+  "afe9a017b09408d1584471ce39800920c1ee39bc0904d42b4ce211562cad77c1": {
+    "query": "SELECT title, body, current_version FROM pages WHERE slug = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "title",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 1,
+          "name": "body",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 2,
+          "name": "current_version",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        true,
+        true,
+        false
+      ]
+    }
+  },
+  "b308fbd746ba6e6018cdb9992397f0fdc2aa7fc3e0b2831b868970b5f21b9062": {
+    "query": "SELECT owner_id, current_version FROM pages WHERE slug = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "owner_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "current_version",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false
+      ]
+    }
+  },
+  "c37318cbb4819ed89b5f655ff82fc18ac4c556d582651d598067e675d0940422": {
+    "query": "SELECT title, rendered_body FROM pages WHERE slug = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "title",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 1,
+          "name": "rendered_body",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        true,
+        true
+      ]
+    }
+  },
+  "c936f44864dafe4660a736babd5f93050b7d35c66c0fe0c86f7b2dcdb7a1e3eb": {
+    "query": "INSERT INTO users (username, password) VALUES ($1, $2)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Varchar"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "d46cee286f9ab6203416901c6a1e6e0b7a6ed7379756f82a0ac0ac2ab12d788d": {
+    "query": "SELECT user_id FROM tokens WHERE token = $1 AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "user_id",
+          "type_info": "Int4"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Bpchar"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "e1dea9b0c64e73fcbcfe940061fabdff3eaf3e2f88db2c6caedc58f7127f1cce": {
+    "query": "INSERT INTO pages (owner_id, slug) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Varchar"
+        ]
+      },
+      "nullable": []
+    }
+  }
+}

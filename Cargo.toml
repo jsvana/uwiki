@@ -15,7 +15,7 @@ pandoc = "0.8"
 pretty_env_logger = "0.4"
 rand = "0.8"
 serde = "1.0"
-sqlx = { version = "0.5", features = [ "postgres", "runtime-tokio-rustls" ] }
+sqlx = { version = "0.5", features = [ "postgres", "runtime-tokio-rustls", "offline" ] }
 tokio = { version = "1", features = ["full"] }
 uwiki-types = "0.1"
 warp = "0.3"

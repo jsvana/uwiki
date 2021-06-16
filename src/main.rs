@@ -443,7 +443,7 @@ async fn render_handler(
     let mut doc = pandoc::new();
     doc.set_variable("title", &title);
     doc.add_option(PandocOption::Template(config.page_template_path));
-    doc.set_input_format(InputFormat::Markdown, Vec::new());
+    doc.set_input_format(InputFormat::MarkdownGithub, Vec::new());
     doc.set_output_format(OutputFormat::Html, Vec::new());
     doc.set_input(InputKind::Pipe(body));
     doc.set_output(OutputKind::Pipe);

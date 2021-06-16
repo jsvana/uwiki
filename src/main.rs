@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 use std::convert::TryInto;
 use std::iter;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -18,6 +19,7 @@ use warp::Filter;
 
 #[derive(Clone)]
 pub struct Config {
+    bind_address: SocketAddr,
     database_url: String,
     token_ttl: Duration,
     page_template_path: PathBuf,
@@ -445,6 +447,9 @@ async fn main() -> Result<()> {
     pretty_env_logger::init();
 
     let config = Config {
+        bind_address: dotenv::var("BIND_ADDRESS")
+            .unwrap_or_else(|_| "0.0.0.0:1181".to_string())
+            .parse()?,
         database_url: dotenv::var("DATABASE_URL").context("Missing env var $DATABASE_URL")?,
         token_ttl: Duration::from_secs(
             dotenv::var("TOKEN_TTL_SECONDS")
@@ -504,7 +509,7 @@ async fn main() -> Result<()> {
             .or(get_page)
             .or(set_page),
     )
-    .run(([127, 0, 0, 1], 3030))
+    .run(config.bind_address)
     .await;
 
     Ok(())

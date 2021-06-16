@@ -20,7 +20,8 @@ Configuration is done through environment variables.
 * `PAGE_TEMPLATE_PATH`: location of HTML template used to render wiki pages
 
 **Optional**:
-* `TOKEN_TTL_SECONDS`: number of seconds a login token is good for
+* `TOKEN_TTL_SECONDS`: number of seconds a login token is good for (defaults to one week)
+* `BIND_ADDRESS`: IP and port to bind the server to (defaults to `0.0.0.0:1181`)
 
 ## License
 [MIT](LICENSE.md)

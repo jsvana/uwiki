@@ -7,6 +7,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use bcrypt::{hash, verify, DEFAULT_COST};
+use handlebars::Handlebars;
+use maplit::btreemap;
 use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOption, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
@@ -22,6 +24,7 @@ pub struct Config {
     database_url: String,
     token_ttl: Duration,
     page_template_path: PathBuf,
+    error_page_template_path: PathBuf,
 }
 
 pub async fn add_user_handler(
@@ -311,10 +314,23 @@ async fn get_page_handler(
     }
 }
 
+fn error_html(message: &str, templates: &Handlebars) -> String {
+    match templates.render("error_page", &btreemap! { "error" => "No such page" }) {
+        Ok(text) => text,
+        Err(e) => {
+            format!(
+                "<html>Error: {} (hit \"{}\" while generating HTML)</html>",
+                message, e
+            )
+        }
+    }
+}
+
 async fn render_handler(
     tail: Tail,
     db: Pool<Postgres>,
     config: Config,
+    templates: Handlebars<'_>,
 ) -> Result<impl warp::Reply, Infallible> {
     let page = match sqlx::query!(
         "SELECT title, body FROM pages WHERE slug = $1",
@@ -326,7 +342,7 @@ async fn render_handler(
         Ok(page) => page,
         Err(_) => {
             return Ok(warp::reply::with_status(
-                warp::reply::html("<html>No such page</html>".to_string()),
+                warp::reply::html(error_html("No such page", &templates)),
                 StatusCode::NOT_FOUND,
             ));
         }
@@ -336,17 +352,17 @@ async fn render_handler(
         (Some(title), Some(body)) => (title, body),
         (Some(_), None) => {
             return Ok(warp::reply::with_status(
-                warp::reply::html(
-                    "<html>Page is still being populated (has title, missing body).</html>"
-                        .to_string(),
-                ),
+                warp::reply::html(error_html(
+                    "Page is still being populated (has title, missing body)",
+                    &templates,
+                )),
                 StatusCode::NOT_FOUND,
             ));
         }
         (None, Some(body)) => (tail.as_str().to_string(), body),
         (None, None) => {
             return Ok(warp::reply::with_status(
-                warp::reply::html("<html>Page is still being populated.</html>".to_string()),
+                warp::reply::html(error_html("Page is still being populated.", &templates)),
                 StatusCode::NOT_FOUND,
             ));
         }
@@ -354,7 +370,7 @@ async fn render_handler(
 
     let mut doc = pandoc::new();
     doc.set_variable("title", &title);
-    doc.add_option(PandocOption::Template(config.page_template_path));
+    doc.add_option(PandocOption::Template(config.page_template_path.clone()));
     doc.set_input_format(InputFormat::MarkdownGithub, Vec::new());
     doc.set_output_format(OutputFormat::Html, Vec::new());
     doc.set_input(InputKind::Pipe(body));
@@ -363,8 +379,10 @@ async fn render_handler(
         Ok(output) => output,
         Err(e) => {
             return Ok(warp::reply::with_status(
-                // TODO(jsvana): static page?
-                warp::reply::html(format!("<html>Error (failed to run pandoc: {})</html>", e)),
+                warp::reply::html(error_html(
+                    &format!("Error (failed to run pandoc: {})", e),
+                    &templates,
+                )),
                 StatusCode::INTERNAL_SERVER_ERROR,
             ));
         }
@@ -374,8 +392,7 @@ async fn render_handler(
         PandocOutput::ToBuffer(buffer) => buffer,
         _ => {
             return Ok(warp::reply::with_status(
-                // TODO(jsvana): static page?
-                warp::reply::html("<html>Error</html>".to_string()),
+                warp::reply::html(error_html("Error", &templates)),
                 StatusCode::INTERNAL_SERVER_ERROR,
             ));
         }
@@ -399,6 +416,12 @@ fn with_config(
     warp::any().map(move || config.clone())
 }
 
+fn with_templates(
+    templates: Handlebars,
+) -> impl Filter<Extract = (Handlebars,), Error = std::convert::Infallible> + Clone {
+    warp::any().map(move || templates.clone())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     if std::env::var_os("RUST_LOG").is_none() {
@@ -418,6 +441,9 @@ async fn main() -> Result<()> {
         ),
         page_template_path: dotenv::var("PAGE_TEMPLATE_PATH")
             .context("Missing env var $PAGE_TEMPLATE_PATH")?
+            .parse()?,
+        error_page_template_path: dotenv::var("ERROR_PAGE_TEMPLATE_PATH")
+            .context("Missing env var $ERROR_PAGE_TEMPLATE_PATH")?
             .parse()?,
     };
 
@@ -441,11 +467,16 @@ async fn main() -> Result<()> {
         .and(with_config(config.clone()))
         .and_then(authenticate_handler);
 
+    let error_page_template = std::fs::read_to_string(config.error_page_template_path.clone())?;
+    let mut handlebars = Handlebars::new();
+    handlebars.register_template_string("error_page", error_page_template)?;
+
     let render_wiki = warp::get()
         .and(warp::path("w"))
         .and(warp::path::tail())
         .and(with_db(pool.clone()))
         .and(with_config(config.clone()))
+        .and(with_templates(handlebars))
         .and_then(render_handler);
 
     let get_page = warp::post()

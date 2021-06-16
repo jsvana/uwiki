@@ -18,6 +18,7 @@ Configuration is done through environment variables.
 **Required:**
 * `DATABASE_URL`: database connection string
 * `PAGE_TEMPLATE_PATH`: location of HTML template used to render wiki pages
+* `ERROR_PAGE_TEMPLATE_PATH`: location of HTML template used to error pages
 
 **Optional**:
 * `TOKEN_TTL_SECONDS`: number of seconds a login token is good for (defaults to one week)

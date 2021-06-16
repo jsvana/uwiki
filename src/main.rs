@@ -10,7 +10,6 @@ use bcrypt::{hash, verify, DEFAULT_COST};
 use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOption, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
-use serde_derive::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
 use warp::http::StatusCode;
@@ -25,96 +24,14 @@ pub struct Config {
     page_template_path: PathBuf,
 }
 
-#[derive(Serialize)]
-struct AddUserResponse {
-    success: bool,
-    message: String,
-}
-
-#[derive(Serialize)]
-struct AuthenticateResponse {
-    success: bool,
-    message: String,
-    token: Option<String>,
-}
-
-impl AuthenticateResponse {
-    fn error(message: String) -> Self {
-        Self {
-            success: false,
-            message,
-            token: None,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct GetPageRequest {
-    token: String,
-    slug: String,
-}
-
-#[derive(Serialize)]
-struct GetPageResponse {
-    success: bool,
-    message: String,
-    title: Option<String>,
-    body: Option<String>,
-    version: Option<i32>,
-}
-
-impl GetPageResponse {
-    fn error(message: String) -> Self {
-        Self {
-            success: false,
-            message,
-            title: None,
-            body: None,
-            version: None,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct SetPageRequest {
-    token: String,
-    slug: String,
-    title: String,
-    body: String,
-    previous_version: i32,
-}
-
-#[derive(Serialize)]
-struct SetPageResponse {
-    success: bool,
-    message: String,
-    new_version: Option<i32>,
-}
-
-impl SetPageResponse {
-    fn error(message: String) -> Self {
-        Self {
-            success: false,
-            message,
-            new_version: None,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Credentials {
-    username: String,
-    password: String,
-}
-
 pub async fn add_user_handler(
-    credentials: Credentials,
+    request: uwiki_types::AddUserRequest,
     db: Pool<Postgres>,
 ) -> Result<impl warp::Reply, Infallible> {
-    let hashed_password = match hash(credentials.password, DEFAULT_COST) {
+    let hashed_password = match hash(request.password, DEFAULT_COST) {
         Ok(password) => password,
         Err(e) => {
-            return Ok(warp::reply::json(&AddUserResponse {
+            return Ok(warp::reply::json(&uwiki_types::AddUserResponse {
                 success: false,
                 message: format!("Error hashing password: {}", e),
             }));
@@ -123,17 +40,17 @@ pub async fn add_user_handler(
 
     match sqlx::query!(
         "INSERT INTO users (username, password) VALUES ($1, $2)",
-        credentials.username,
+        request.username,
         hashed_password,
     )
     .execute(&db)
     .await
     {
-        Ok(_) => Ok(warp::reply::json(&AddUserResponse {
+        Ok(_) => Ok(warp::reply::json(&uwiki_types::AddUserResponse {
             success: true,
-            message: format!("Added user {}", credentials.username),
+            message: format!("Added user {}", request.username),
         })),
-        Err(e) => Ok(warp::reply::json(&AddUserResponse {
+        Err(e) => Ok(warp::reply::json(&uwiki_types::AddUserResponse {
             success: false,
             message: format!("Error adding user: {}", e),
         })),
@@ -141,39 +58,40 @@ pub async fn add_user_handler(
 }
 
 pub async fn authenticate_handler(
-    credentials: Credentials,
+    request: uwiki_types::AuthenticateRequest,
     db: Pool<Postgres>,
     config: Config,
 ) -> Result<impl warp::Reply, Infallible> {
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            return Ok(warp::reply::json(&AuthenticateResponse::error(format!(
-                "Error authenticating: {}",
-                e
-            ))));
+            return Ok(warp::reply::json(
+                &uwiki_types::AuthenticateResponse::error(format!("Error authenticating: {}", e)),
+            ));
         }
     };
 
     let user = match sqlx::query!(
         "SELECT id, password FROM users WHERE username = $1",
-        credentials.username,
+        request.username,
     )
     .fetch_one(&mut tx)
     .await
     {
         Ok(user) => user,
         Err(_) => {
-            return Ok(warp::reply::json(&AuthenticateResponse::error(
-                "Invalid username or password".to_string(),
-            )));
+            return Ok(warp::reply::json(
+                &uwiki_types::AuthenticateResponse::error(
+                    "Invalid username or password".to_string(),
+                ),
+            ));
         }
     };
 
-    if let Ok(false) | Err(_) = verify(credentials.password, &user.password) {
-        return Ok(warp::reply::json(&AuthenticateResponse::error(
-            "Invalid username or password".to_string(),
-        )));
+    if let Ok(false) | Err(_) = verify(request.password, &user.password) {
+        return Ok(warp::reply::json(
+            &uwiki_types::AuthenticateResponse::error("Invalid username or password".to_string()),
+        ));
     }
 
     let token: String = {
@@ -190,18 +108,22 @@ pub async fn authenticate_handler(
     let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(timestamp) => timestamp,
         Err(_) => {
-            return Ok(warp::reply::json(&AuthenticateResponse::error(
-                "Internal error (time went backwards)".to_string(),
-            )));
+            return Ok(warp::reply::json(
+                &uwiki_types::AuthenticateResponse::error(
+                    "Internal error (time went backwards)".to_string(),
+                ),
+            ));
         }
     };
 
     let expiration: i32 = match (now + config.token_ttl).as_secs().try_into() {
         Ok(timestamp) => timestamp,
         Err(_) => {
-            return Ok(warp::reply::json(&AuthenticateResponse::error(
-                "Internal error (expiration timestamp too large)".to_string(),
-            )));
+            return Ok(warp::reply::json(
+                &uwiki_types::AuthenticateResponse::error(
+                    "Internal error (expiration timestamp too large)".to_string(),
+                ),
+            ));
         }
     };
 
@@ -214,36 +136,33 @@ pub async fn authenticate_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok(warp::reply::json(&AuthenticateResponse::error(format!(
-            "Error generating token: {}",
-            e
-        ))));
+        return Ok(warp::reply::json(
+            &uwiki_types::AuthenticateResponse::error(format!("Error generating token: {}", e)),
+        ));
     }
 
     match tx.commit().await {
-        Ok(_) => Ok(warp::reply::json(&AuthenticateResponse {
+        Ok(_) => Ok(warp::reply::json(&uwiki_types::AuthenticateResponse {
             success: true,
             message: "Logged in successfully".to_string(),
             token: Some(token),
         })),
-        Err(e) => Ok(warp::reply::json(&AuthenticateResponse::error(format!(
-            "Error generating token: {}",
-            e
-        )))),
+        Err(e) => Ok(warp::reply::json(
+            &uwiki_types::AuthenticateResponse::error(format!("Error generating token: {}", e)),
+        )),
     }
 }
 
 async fn set_page_handler(
-    request: SetPageRequest,
+    request: uwiki_types::SetPageRequest,
     db: Pool<Postgres>,
 ) -> Result<impl warp::Reply, Infallible> {
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            return Ok(warp::reply::json(&SetPageResponse::error(format!(
-                "Error setting content: {}",
-                e
-            ))));
+            return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
+                format!("Error setting content: {}", e),
+            )));
         }
     };
 
@@ -258,7 +177,7 @@ async fn set_page_handler(
     {
         Ok(row) => row.user_id,
         Err(_) => {
-            return Ok(warp::reply::json(&SetPageResponse::error(
+            return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
                 "Invalid API token".to_string(),
             )));
         }
@@ -273,21 +192,20 @@ async fn set_page_handler(
     {
         Ok(page) => page,
         Err(e) => {
-            return Ok(warp::reply::json(&SetPageResponse::error(format!(
-                "Error getting page: {}",
-                e
-            ))));
+            return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
+                format!("Error getting page: {}", e),
+            )));
         }
     };
 
     if page.owner_id != user_id {
-        return Ok(warp::reply::json(&SetPageResponse::error(
+        return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
             "Refusing to modify page you do not own".to_string(),
         )));
     }
 
     if page.current_version != request.previous_version {
-        return Ok(warp::reply::json(&SetPageResponse::error(
+        return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
             "Page has been updated since fetching. Refusing to update".to_string(),
         )));
     }
@@ -304,36 +222,33 @@ async fn set_page_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok(warp::reply::json(&SetPageResponse::error(format!(
-            "Error updating page: {}",
-            e
-        ))));
+        return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
+            format!("Error updating page: {}", e),
+        )));
     }
 
     match tx.commit().await {
-        Ok(_) => Ok(warp::reply::json(&SetPageResponse {
+        Ok(_) => Ok(warp::reply::json(&uwiki_types::SetPageResponse {
             success: true,
             message: "Updated successfully".to_string(),
             new_version: Some(new_version),
         })),
-        Err(e) => Ok(warp::reply::json(&SetPageResponse::error(format!(
-            "Error updating page: {}",
-            e
-        )))),
+        Err(e) => Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
+            format!("Error updating page: {}", e),
+        ))),
     }
 }
 
 async fn get_page_handler(
-    request: GetPageRequest,
+    request: uwiki_types::GetPageRequest,
     db: Pool<Postgres>,
 ) -> Result<impl warp::Reply, Infallible> {
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            return Ok(warp::reply::json(&GetPageResponse::error(format!(
-                "Error getting page: {}",
-                e
-            ))));
+            return Ok(warp::reply::json(&uwiki_types::GetPageResponse::error(
+                format!("Error getting page: {}", e),
+            )));
         }
     };
 
@@ -348,7 +263,7 @@ async fn get_page_handler(
     {
         Ok(row) => row.user_id,
         Err(_) => {
-            return Ok(warp::reply::json(&GetPageResponse::error(
+            return Ok(warp::reply::json(&uwiki_types::GetPageResponse::error(
                 "Invalid API token (can't claim a page without an API token)".to_string(),
             )));
         }
@@ -362,10 +277,9 @@ async fn get_page_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok(warp::reply::json(&GetPageResponse::error(format!(
-            "Error getting page: {}",
-            e
-        ))));
+        return Ok(warp::reply::json(&uwiki_types::GetPageResponse::error(
+            format!("Error getting page: {}", e),
+        )));
     }
 
     let page = match sqlx::query!(
@@ -377,25 +291,23 @@ async fn get_page_handler(
     {
         Ok(page) => page,
         Err(e) => {
-            return Ok(warp::reply::json(&GetPageResponse::error(format!(
-                "Error getting page: {}",
-                e
-            ))));
+            return Ok(warp::reply::json(&uwiki_types::GetPageResponse::error(
+                format!("Error getting page: {}", e),
+            )));
         }
     };
 
     match tx.commit().await {
-        Ok(_) => Ok(warp::reply::json(&GetPageResponse {
+        Ok(_) => Ok(warp::reply::json(&uwiki_types::GetPageResponse {
             success: true,
             message: "paged fetched successfully".to_string(),
             title: page.title,
             body: page.body,
             version: Some(page.current_version),
         })),
-        Err(e) => Ok(warp::reply::json(&GetPageResponse::error(format!(
-            "Error updating page: {}",
-            e
-        )))),
+        Err(e) => Ok(warp::reply::json(&uwiki_types::GetPageResponse::error(
+            format!("Error updating page: {}", e),
+        ))),
     }
 }
 
@@ -449,10 +361,10 @@ async fn render_handler(
     doc.set_output(OutputKind::Pipe);
     let output = match doc.execute() {
         Ok(output) => output,
-        Err(_) => {
+        Err(e) => {
             return Ok(warp::reply::with_status(
                 // TODO(jsvana): static page?
-                warp::reply::html("<html>Error</html>".to_string()),
+                warp::reply::html(format!("<html>Error (failed to run pandoc: {})</html>", e)),
                 StatusCode::INTERNAL_SERVER_ERROR,
             ));
         }

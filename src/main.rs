@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 use std::convert::TryInto;
 use std::iter;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -13,6 +14,13 @@ use sqlx::{Pool, Postgres};
 use warp::http::StatusCode;
 use warp::path::Tail;
 use warp::Filter;
+
+#[derive(Clone)]
+pub struct Config {
+    database_url: String,
+    token_ttl: Duration,
+    page_template_path: PathBuf,
+}
 
 #[derive(Serialize)]
 struct Token {
@@ -61,6 +69,7 @@ pub struct Credentials {
 pub async fn authenticate_handler(
     credentials: Credentials,
     db: Pool<Postgres>,
+    config: Config,
 ) -> Result<impl warp::Reply, Infallible> {
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
@@ -107,8 +116,7 @@ pub async fn authenticate_handler(
         }
     };
 
-    // TODO(jsvana): configurable expiration
-    let expiration: i32 = match (now + Duration::from_secs(604800)).as_secs().try_into() {
+    let expiration: i32 = match (now + config.token_ttl).as_secs().try_into() {
         Ok(timestamp) => timestamp,
         Err(_) => {
             return Ok(warp::reply::json(&Error {
@@ -298,7 +306,11 @@ async fn get_page_handler(
     }
 }
 
-async fn render_handler(tail: Tail, db: Pool<Postgres>) -> Result<impl warp::Reply, Infallible> {
+async fn render_handler(
+    tail: Tail,
+    db: Pool<Postgres>,
+    config: Config,
+) -> Result<impl warp::Reply, Infallible> {
     let page = match sqlx::query!(
         "SELECT title, body FROM pages WHERE slug = $1",
         tail.as_str()
@@ -337,8 +349,7 @@ async fn render_handler(tail: Tail, db: Pool<Postgres>) -> Result<impl warp::Rep
 
     let mut doc = pandoc::new();
     doc.set_variable("title", &title);
-    // TODO(jsvana): config option?
-    doc.add_option(PandocOption::Template("assets/template.html".into()));
+    doc.add_option(PandocOption::Template(config.page_template_path));
     doc.set_input_format(InputFormat::Markdown, Vec::new());
     doc.set_output_format(OutputFormat::Html, Vec::new());
     doc.set_input(InputKind::Pipe(body));
@@ -377,6 +388,12 @@ fn with_db(
     warp::any().map(move || db.clone())
 }
 
+fn with_config(
+    config: Config,
+) -> impl Filter<Extract = (Config,), Error = std::convert::Infallible> + Clone {
+    warp::any().map(move || config.clone())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     if std::env::var_os("RUST_LOG").is_none() {
@@ -386,11 +403,21 @@ async fn main() -> Result<()> {
     }
     pretty_env_logger::init();
 
-    let database_url = dotenv::var("DATABASE_URL").context("Missing env var $DATABASE_URL")?;
+    let config = Config {
+        database_url: dotenv::var("DATABASE_URL").context("Missing env var $DATABASE_URL")?,
+        token_ttl: Duration::from_secs(
+            dotenv::var("TOKEN_TTL_SECONDS")
+                .unwrap_or_else(|_| "604800".to_string()) // Defaults to one week
+                .parse()?,
+        ),
+        page_template_path: dotenv::var("PAGE_TEMPLATE_PATH")
+            .context("Missing env var $PAGE_TEMPLATE_PATH")?
+            .parse()?,
+    };
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
-        .connect(&database_url)
+        .connect(&config.database_url)
         .await?;
 
     let authenticate = warp::post()
@@ -398,12 +425,14 @@ async fn main() -> Result<()> {
         .and(warp::body::content_length_limit(1024 * 16))
         .and(warp::body::json())
         .and(with_db(pool.clone()))
+        .and(with_config(config.clone()))
         .and_then(authenticate_handler);
 
     let render_wiki = warp::get()
         .and(warp::path("w"))
         .and(warp::path::tail())
         .and(with_db(pool.clone()))
+        .and(with_config(config.clone()))
         .and_then(render_handler);
 
     let get_page = warp::post()

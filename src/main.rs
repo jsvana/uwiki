@@ -4,7 +4,6 @@ use std::iter;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use log::debug;
 use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOption, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
@@ -383,7 +382,7 @@ async fn main() -> Result<()> {
     if std::env::var_os("RUST_LOG").is_none() {
         // Set `RUST_LOG=todos=debug` to see debug logs,
         // this only shows access logs.
-        std::env::set_var("RUST_LOG", "todos=info");
+        std::env::set_var("RUST_LOG", "uwiki=info");
     }
     pretty_env_logger::init();
 

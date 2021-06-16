@@ -15,9 +15,37 @@ use warp::http::StatusCode;
 use warp::path::Tail;
 use warp::Filter;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 struct Token {
     token: String,
+}
+
+#[derive(Deserialize)]
+struct GetPageRequest {
+    token: String,
+    slug: String,
+}
+
+#[derive(Serialize)]
+struct GetPageResponse {
+    title: Option<String>,
+    body: Option<String>,
+    version: i32,
+}
+
+#[derive(Deserialize)]
+struct SetPageRequest {
+    token: String,
+    slug: String,
+    title: String,
+    body: String,
+    previous_version: i32,
+}
+
+#[derive(Serialize)]
+struct SetPageResponse {
+    message: String,
+    new_version: i32,
 }
 
 #[derive(Serialize)]
@@ -35,14 +63,21 @@ pub async fn authenticate_handler(
     credentials: Credentials,
     db: Pool<Postgres>,
 ) -> Result<impl warp::Reply, Infallible> {
-    debug!("authenticate: {:?}", credentials);
+    let mut tx = match db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            return Ok(warp::reply::json(&Error {
+                message: format!("Error authenticating: {}", e),
+            }))
+        }
+    };
 
     let id = match sqlx::query!(
         "SELECT id FROM users WHERE username = $1 AND hashed_password = $2",
         credentials.username,
         credentials.password
     )
-    .fetch_one(&db)
+    .fetch_one(&mut tx)
     .await
     {
         Ok(user) => user.id,
@@ -73,6 +108,7 @@ pub async fn authenticate_handler(
         }
     };
 
+    // TODO(jsvana): configurable expiration
     let expiration: i32 = match (now + Duration::from_secs(604800)).as_secs().try_into() {
         Ok(timestamp) => timestamp,
         Err(_) => {
@@ -82,16 +118,21 @@ pub async fn authenticate_handler(
         }
     };
 
-    // TODO(jsvana): configurable expiration
-    match sqlx::query!(
+    if let Err(e) = sqlx::query!(
         "INSERT INTO tokens (user_id, token, expiration) VALUES ($1, $2, $3)",
         id,
         token,
         expiration,
     )
-    .execute(&db)
+    .execute(&mut tx)
     .await
     {
+        return Ok(warp::reply::json(&Error {
+            message: format!("Error generating token: {}", e),
+        }));
+    }
+
+    match tx.commit().await {
         Ok(_) => Ok(warp::reply::json(&Token { token })),
         Err(e) => Ok(warp::reply::json(&Error {
             message: format!("Error generating token: {}", e),
@@ -99,17 +140,8 @@ pub async fn authenticate_handler(
     }
 }
 
-// TODO(jsvana): this initiates a "set content" workflow,
-// but doesn't set page content itself.
-//
-// The flow is as follows:
-//   1. Call this method, get current title, content, and version
-//   2. Make edits as appropriate
-//   3. Call commit set content
-//
-// Only after (3) will the content be updated.
-async fn page_set_content_handler(
-    token: Token,
+async fn set_page_handler(
+    request: SetPageRequest,
     db: Pool<Postgres>,
 ) -> Result<impl warp::Reply, Infallible> {
     let mut tx = match db.begin().await {
@@ -125,7 +157,7 @@ async fn page_set_content_handler(
         "SELECT user_id FROM tokens \
         WHERE token = $1 \
         AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
-        token.token,
+        request.token,
     )
     .fetch_one(&mut tx)
     .await
@@ -138,16 +170,133 @@ async fn page_set_content_handler(
         }
     };
 
-    println!("{}", user_id);
-
-    // Get user ID from access token
     // Select page by slug, compare page's owner_id to user ID
     // Error if not the same
     // Return page version and content if same
 
-    Ok(warp::reply::json(&Error {
-        message: "TODO lol".to_string(),
-    }))
+    let page = match sqlx::query!(
+        "SELECT owner_id, current_version FROM pages WHERE slug = $1",
+        request.slug,
+    )
+    .fetch_one(&mut tx)
+    .await
+    {
+        Ok(page) => page,
+        Err(e) => {
+            return Ok(warp::reply::json(&Error {
+                message: format!("Error getting page: {}", e),
+            }))
+        }
+    };
+
+    if page.owner_id != user_id {
+        return Ok(warp::reply::json(&Error {
+            message: "Refusing to modify page you do not own".to_string(),
+        }));
+    }
+
+    if page.current_version != request.previous_version {
+        return Ok(warp::reply::json(&Error {
+            message: "Page has been updated since fetching. Refusing to update".to_string(),
+        }));
+    }
+
+    let new_version = request.previous_version + 1;
+
+    if let Err(e) = sqlx::query!(
+        "UPDATE pages SET title = $1, body = $2, current_version = $3 WHERE slug = $4",
+        request.title,
+        request.body,
+        new_version,
+        request.slug,
+    )
+    .execute(&mut tx)
+    .await
+    {
+        return Ok(warp::reply::json(&Error {
+            message: format!("Error updating page: {}", e),
+        }));
+    }
+
+    match tx.commit().await {
+        Ok(_) => Ok(warp::reply::json(&SetPageResponse {
+            message: "Updated successfully".to_string(),
+            new_version,
+        })),
+        Err(e) => Ok(warp::reply::json(&Error {
+            message: format!("Error updating page: {}", e),
+        })),
+    }
+}
+
+async fn get_page_handler(
+    request: GetPageRequest,
+    db: Pool<Postgres>,
+) -> Result<impl warp::Reply, Infallible> {
+    let mut tx = match db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            return Ok(warp::reply::json(&Error {
+                message: format!("Error getting page: {}", e),
+            }))
+        }
+    };
+
+    let user_id = match sqlx::query!(
+        "SELECT user_id FROM tokens \
+        WHERE token = $1 \
+        AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+        request.token,
+    )
+    .fetch_one(&mut tx)
+    .await
+    {
+        Ok(row) => row.user_id,
+        Err(_) => {
+            return Ok(warp::reply::json(&Error {
+                message: "Invalid API token (can't claim a page without an API token)".to_string(),
+            }));
+        }
+    };
+
+    if let Err(e) = sqlx::query!(
+        "INSERT INTO pages (owner_id, slug) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        user_id,
+        request.slug,
+    )
+    .execute(&mut tx)
+    .await
+    {
+        return Ok(warp::reply::json(&Error {
+            message: format!("Error getting page: {}", e),
+        }));
+    }
+
+    let page = match sqlx::query!(
+        "SELECT title, body, current_version FROM pages WHERE slug = $1",
+        request.slug,
+    )
+    .fetch_one(&mut tx)
+    .await
+    {
+        Ok(page) => page,
+        Err(e) => {
+            return Ok(warp::reply::json(&Error {
+                message: format!("Error getting page: {}", e),
+            }))
+        }
+    };
+
+    match tx.commit().await {
+        Ok(_) => Ok(warp::reply::json(&GetPageResponse {
+            title: page.title,
+            body: page.body,
+            version: page.current_version,
+        })),
+        Err(e) => Ok(warp::reply::json(&Error {
+            message: format!("Error updating page: {}", e),
+        })),
+    }
 }
 
 async fn render_handler(tail: Tail, db: Pool<Postgres>) -> Result<impl warp::Reply, Infallible> {
@@ -258,14 +407,21 @@ async fn main() -> Result<()> {
         .and(with_db(pool.clone()))
         .and_then(render_handler);
 
-    let page_set_content = warp::post()
+    let get_page = warp::post()
+        .and(warp::path("g"))
+        .and(warp::body::content_length_limit(1024 * 16))
+        .and(warp::body::json())
+        .and(with_db(pool.clone()))
+        .and_then(get_page_handler);
+
+    let set_page = warp::post()
         .and(warp::path("s"))
         .and(warp::body::content_length_limit(1024 * 16))
         .and(warp::body::json())
         .and(with_db(pool))
-        .and_then(page_set_content_handler);
+        .and_then(set_page_handler);
 
-    warp::serve(authenticate.or(render_wiki).or(page_set_content))
+    warp::serve(authenticate.or(render_wiki).or(get_page).or(set_page))
         .run(([127, 0, 0, 1], 3030))
         .await;
 

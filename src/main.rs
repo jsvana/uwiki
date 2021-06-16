@@ -26,13 +26,26 @@ pub struct Config {
 }
 
 #[derive(Serialize)]
-struct Token {
-    token: String,
+struct AddUserResponse {
+    success: bool,
+    message: String,
 }
 
 #[derive(Serialize)]
-struct AddUserResponse {
+struct AuthenticateResponse {
+    success: bool,
     message: String,
+    token: Option<String>,
+}
+
+impl AuthenticateResponse {
+    fn error(message: String) -> Self {
+        Self {
+            success: false,
+            message,
+            token: None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -43,9 +56,23 @@ struct GetPageRequest {
 
 #[derive(Serialize)]
 struct GetPageResponse {
+    success: bool,
+    message: String,
     title: Option<String>,
     body: Option<String>,
-    version: i32,
+    version: Option<i32>,
+}
+
+impl GetPageResponse {
+    fn error(message: String) -> Self {
+        Self {
+            success: false,
+            message,
+            title: None,
+            body: None,
+            version: None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -59,13 +86,19 @@ struct SetPageRequest {
 
 #[derive(Serialize)]
 struct SetPageResponse {
+    success: bool,
     message: String,
-    new_version: i32,
+    new_version: Option<i32>,
 }
 
-#[derive(Serialize)]
-struct Error {
-    message: String,
+impl SetPageResponse {
+    fn error(message: String) -> Self {
+        Self {
+            success: false,
+            message,
+            new_version: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -81,7 +114,8 @@ pub async fn add_user_handler(
     let hashed_password = match hash(credentials.password, DEFAULT_COST) {
         Ok(password) => password,
         Err(e) => {
-            return Ok(warp::reply::json(&Error {
+            return Ok(warp::reply::json(&AddUserResponse {
+                success: false,
                 message: format!("Error hashing password: {}", e),
             }));
         }
@@ -96,9 +130,11 @@ pub async fn add_user_handler(
     .await
     {
         Ok(_) => Ok(warp::reply::json(&AddUserResponse {
+            success: true,
             message: format!("Added user {}", credentials.username),
         })),
-        Err(e) => Ok(warp::reply::json(&Error {
+        Err(e) => Ok(warp::reply::json(&AddUserResponse {
+            success: false,
             message: format!("Error adding user: {}", e),
         })),
     }
@@ -112,9 +148,10 @@ pub async fn authenticate_handler(
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            return Ok(warp::reply::json(&Error {
-                message: format!("Error authenticating: {}", e),
-            }))
+            return Ok(warp::reply::json(&AuthenticateResponse::error(format!(
+                "Error authenticating: {}",
+                e
+            ))));
         }
     };
 
@@ -127,16 +164,16 @@ pub async fn authenticate_handler(
     {
         Ok(user) => user,
         Err(_) => {
-            return Ok(warp::reply::json(&Error {
-                message: "Invalid username or password".to_string(),
-            }));
+            return Ok(warp::reply::json(&AuthenticateResponse::error(
+                "Invalid username or password".to_string(),
+            )));
         }
     };
 
     if let Ok(false) | Err(_) = verify(credentials.password, &user.password) {
-        return Ok(warp::reply::json(&Error {
-            message: "Invalid username or password".to_string(),
-        }));
+        return Ok(warp::reply::json(&AuthenticateResponse::error(
+            "Invalid username or password".to_string(),
+        )));
     }
 
     let token: String = {
@@ -153,18 +190,18 @@ pub async fn authenticate_handler(
     let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(timestamp) => timestamp,
         Err(_) => {
-            return Ok(warp::reply::json(&Error {
-                message: "Internal error (time went backwards)".to_string(),
-            }));
+            return Ok(warp::reply::json(&AuthenticateResponse::error(
+                "Internal error (time went backwards)".to_string(),
+            )));
         }
     };
 
     let expiration: i32 = match (now + config.token_ttl).as_secs().try_into() {
         Ok(timestamp) => timestamp,
         Err(_) => {
-            return Ok(warp::reply::json(&Error {
-                message: "Internal error (expiration timestamp too large)".to_string(),
-            }));
+            return Ok(warp::reply::json(&AuthenticateResponse::error(
+                "Internal error (expiration timestamp too large)".to_string(),
+            )));
         }
     };
 
@@ -177,16 +214,22 @@ pub async fn authenticate_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok(warp::reply::json(&Error {
-            message: format!("Error generating token: {}", e),
-        }));
+        return Ok(warp::reply::json(&AuthenticateResponse::error(format!(
+            "Error generating token: {}",
+            e
+        ))));
     }
 
     match tx.commit().await {
-        Ok(_) => Ok(warp::reply::json(&Token { token })),
-        Err(e) => Ok(warp::reply::json(&Error {
-            message: format!("Error generating token: {}", e),
+        Ok(_) => Ok(warp::reply::json(&AuthenticateResponse {
+            success: true,
+            message: "Logged in successfully".to_string(),
+            token: Some(token),
         })),
+        Err(e) => Ok(warp::reply::json(&AuthenticateResponse::error(format!(
+            "Error generating token: {}",
+            e
+        )))),
     }
 }
 
@@ -197,9 +240,10 @@ async fn set_page_handler(
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            return Ok(warp::reply::json(&Error {
-                message: format!("Error setting content: {}", e),
-            }))
+            return Ok(warp::reply::json(&SetPageResponse::error(format!(
+                "Error setting content: {}",
+                e
+            ))));
         }
     };
 
@@ -214,15 +258,11 @@ async fn set_page_handler(
     {
         Ok(row) => row.user_id,
         Err(_) => {
-            return Ok(warp::reply::json(&Error {
-                message: "Invalid API token".to_string(),
-            }));
+            return Ok(warp::reply::json(&SetPageResponse::error(
+                "Invalid API token".to_string(),
+            )));
         }
     };
-
-    // Select page by slug, compare page's owner_id to user ID
-    // Error if not the same
-    // Return page version and content if same
 
     let page = match sqlx::query!(
         "SELECT owner_id, current_version FROM pages WHERE slug = $1",
@@ -233,22 +273,23 @@ async fn set_page_handler(
     {
         Ok(page) => page,
         Err(e) => {
-            return Ok(warp::reply::json(&Error {
-                message: format!("Error getting page: {}", e),
-            }))
+            return Ok(warp::reply::json(&SetPageResponse::error(format!(
+                "Error getting page: {}",
+                e
+            ))));
         }
     };
 
     if page.owner_id != user_id {
-        return Ok(warp::reply::json(&Error {
-            message: "Refusing to modify page you do not own".to_string(),
-        }));
+        return Ok(warp::reply::json(&SetPageResponse::error(
+            "Refusing to modify page you do not own".to_string(),
+        )));
     }
 
     if page.current_version != request.previous_version {
-        return Ok(warp::reply::json(&Error {
-            message: "Page has been updated since fetching. Refusing to update".to_string(),
-        }));
+        return Ok(warp::reply::json(&SetPageResponse::error(
+            "Page has been updated since fetching. Refusing to update".to_string(),
+        )));
     }
 
     let new_version = request.previous_version + 1;
@@ -263,19 +304,22 @@ async fn set_page_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok(warp::reply::json(&Error {
-            message: format!("Error updating page: {}", e),
-        }));
+        return Ok(warp::reply::json(&SetPageResponse::error(format!(
+            "Error updating page: {}",
+            e
+        ))));
     }
 
     match tx.commit().await {
         Ok(_) => Ok(warp::reply::json(&SetPageResponse {
+            success: true,
             message: "Updated successfully".to_string(),
-            new_version,
+            new_version: Some(new_version),
         })),
-        Err(e) => Ok(warp::reply::json(&Error {
-            message: format!("Error updating page: {}", e),
-        })),
+        Err(e) => Ok(warp::reply::json(&SetPageResponse::error(format!(
+            "Error updating page: {}",
+            e
+        )))),
     }
 }
 
@@ -286,9 +330,10 @@ async fn get_page_handler(
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            return Ok(warp::reply::json(&Error {
-                message: format!("Error getting page: {}", e),
-            }))
+            return Ok(warp::reply::json(&GetPageResponse::error(format!(
+                "Error getting page: {}",
+                e
+            ))));
         }
     };
 
@@ -303,9 +348,9 @@ async fn get_page_handler(
     {
         Ok(row) => row.user_id,
         Err(_) => {
-            return Ok(warp::reply::json(&Error {
-                message: "Invalid API token (can't claim a page without an API token)".to_string(),
-            }));
+            return Ok(warp::reply::json(&GetPageResponse::error(
+                "Invalid API token (can't claim a page without an API token)".to_string(),
+            )));
         }
     };
 
@@ -317,9 +362,10 @@ async fn get_page_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok(warp::reply::json(&Error {
-            message: format!("Error getting page: {}", e),
-        }));
+        return Ok(warp::reply::json(&GetPageResponse::error(format!(
+            "Error getting page: {}",
+            e
+        ))));
     }
 
     let page = match sqlx::query!(
@@ -331,21 +377,25 @@ async fn get_page_handler(
     {
         Ok(page) => page,
         Err(e) => {
-            return Ok(warp::reply::json(&Error {
-                message: format!("Error getting page: {}", e),
-            }))
+            return Ok(warp::reply::json(&GetPageResponse::error(format!(
+                "Error getting page: {}",
+                e
+            ))));
         }
     };
 
     match tx.commit().await {
         Ok(_) => Ok(warp::reply::json(&GetPageResponse {
+            success: true,
+            message: "paged fetched successfully".to_string(),
             title: page.title,
             body: page.body,
-            version: page.current_version,
+            version: Some(page.current_version),
         })),
-        Err(e) => Ok(warp::reply::json(&Error {
-            message: format!("Error updating page: {}", e),
-        })),
+        Err(e) => Ok(warp::reply::json(&GetPageResponse::error(format!(
+            "Error updating page: {}",
+            e
+        )))),
     }
 }
 
@@ -440,8 +490,6 @@ fn with_config(
 #[tokio::main]
 async fn main() -> Result<()> {
     if std::env::var_os("RUST_LOG").is_none() {
-        // Set `RUST_LOG=todos=debug` to see debug logs,
-        // this only shows access logs.
         std::env::set_var("RUST_LOG", "uwiki=info");
     }
     pretty_env_logger::init();

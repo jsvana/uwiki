@@ -3,5 +3,6 @@ CREATE TABLE pages (
   owner_id INT NOT NULL,
   current_version INT NOT NULL DEFAULT 0,
   title VARCHAR(256),
-  body TEXT
+  body TEXT,
+  rendered_body TEXT
 );

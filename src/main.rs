@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use handlebars::Handlebars;
 use maplit::btreemap;
-use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOption, PandocOutput};
+use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use sqlx::postgres::PgPoolOptions;
@@ -23,7 +23,7 @@ pub struct Config {
     bind_address: SocketAddr,
     database_url: String,
     token_ttl: Duration,
-    page_template_path: PathBuf,
+    wiki_page_template_path: PathBuf,
     error_page_template_path: PathBuf,
 }
 
@@ -215,10 +215,36 @@ async fn set_page_handler(
 
     let new_version = request.previous_version + 1;
 
+    let rendered_body = {
+        let mut doc = pandoc::new();
+        doc.set_input_format(InputFormat::MarkdownGithub, Vec::new());
+        doc.set_output_format(OutputFormat::Html, Vec::new());
+        doc.set_input(InputKind::Pipe(request.body.clone()));
+        doc.set_output(OutputKind::Pipe);
+        let output = match doc.execute() {
+            Ok(output) => output,
+            Err(e) => {
+                return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
+                    format!("Error rendering page (failed to run pandoc: {})", e),
+                )));
+            }
+        };
+
+        match output {
+            PandocOutput::ToBuffer(buffer) => buffer,
+            _ => {
+                return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
+                    "Malformed Pandoc response".to_string(),
+                )));
+            }
+        }
+    };
+
     if let Err(e) = sqlx::query!(
-        "UPDATE pages SET title = $1, body = $2, current_version = $3 WHERE slug = $4",
+        "UPDATE pages SET title = $1, body = $2, rendered_body = $3, current_version = $4 WHERE slug = $5",
         request.title,
         request.body,
+        rendered_body,
         new_version,
         request.slug,
     )
@@ -329,11 +355,10 @@ fn error_html(message: &str, templates: &Handlebars) -> String {
 async fn render_handler(
     tail: Tail,
     db: Pool<Postgres>,
-    config: Config,
     templates: Handlebars<'_>,
 ) -> Result<impl warp::Reply, Infallible> {
     let page = match sqlx::query!(
-        "SELECT title, body FROM pages WHERE slug = $1",
+        "SELECT title, rendered_body FROM pages WHERE slug = $1",
         tail.as_str()
     )
     .fetch_one(&db)
@@ -348,8 +373,8 @@ async fn render_handler(
         }
     };
 
-    let (title, body) = match (page.title, page.body) {
-        (Some(title), Some(body)) => (title, body),
+    let (title, rendered_body) = match (page.title, page.rendered_body) {
+        (Some(title), Some(rendered_body)) => (title, rendered_body),
         (Some(_), None) => {
             return Ok(warp::reply::with_status(
                 warp::reply::html(error_html(
@@ -359,7 +384,7 @@ async fn render_handler(
                 StatusCode::NOT_FOUND,
             ));
         }
-        (None, Some(body)) => (tail.as_str().to_string(), body),
+        (None, Some(rendered_body)) => (tail.as_str().to_string(), rendered_body),
         (None, None) => {
             return Ok(warp::reply::with_status(
                 warp::reply::html(error_html("Page is still being populated.", &templates)),
@@ -368,38 +393,18 @@ async fn render_handler(
         }
     };
 
-    let mut doc = pandoc::new();
-    doc.set_variable("title", &title);
-    doc.add_option(PandocOption::Template(config.page_template_path.clone()));
-    doc.set_input_format(InputFormat::MarkdownGithub, Vec::new());
-    doc.set_output_format(OutputFormat::Html, Vec::new());
-    doc.set_input(InputKind::Pipe(body));
-    doc.set_output(OutputKind::Pipe);
-    let output = match doc.execute() {
-        Ok(output) => output,
+    let text = match templates.render(
+        "wiki_page",
+        &btreemap! { "title" => title, "body" => rendered_body },
+    ) {
+        Ok(text) => text,
         Err(e) => {
-            return Ok(warp::reply::with_status(
-                warp::reply::html(error_html(
-                    &format!("Error (failed to run pandoc: {})", e),
-                    &templates,
-                )),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ));
-        }
-    };
-
-    let buffer = match output {
-        PandocOutput::ToBuffer(buffer) => buffer,
-        _ => {
-            return Ok(warp::reply::with_status(
-                warp::reply::html(error_html("Error", &templates)),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ));
+            format!("<html>Error: {}</html>", e)
         }
     };
 
     Ok(warp::reply::with_status(
-        warp::reply::html(buffer),
+        warp::reply::html(text),
         StatusCode::OK,
     ))
 }
@@ -439,8 +444,8 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| "604800".to_string()) // Defaults to one week
                 .parse()?,
         ),
-        page_template_path: dotenv::var("PAGE_TEMPLATE_PATH")
-            .context("Missing env var $PAGE_TEMPLATE_PATH")?
+        wiki_page_template_path: dotenv::var("WIKI_PAGE_TEMPLATE_PATH")
+            .context("Missing env var $WIKI_PAGE_TEMPLATE_PATH")?
             .parse()?,
         error_page_template_path: dotenv::var("ERROR_PAGE_TEMPLATE_PATH")
             .context("Missing env var $ERROR_PAGE_TEMPLATE_PATH")?
@@ -467,15 +472,17 @@ async fn main() -> Result<()> {
         .and(with_config(config.clone()))
         .and_then(authenticate_handler);
 
+    let wiki_page_template = std::fs::read_to_string(config.wiki_page_template_path.clone())?;
     let error_page_template = std::fs::read_to_string(config.error_page_template_path.clone())?;
+
     let mut handlebars = Handlebars::new();
+    handlebars.register_template_string("wiki_page", wiki_page_template)?;
     handlebars.register_template_string("error_page", error_page_template)?;
 
     let render_wiki = warp::get()
         .and(warp::path("w"))
         .and(warp::path::tail())
         .and(with_db(pool.clone()))
-        .and(with_config(config.clone()))
         .and(with_templates(handlebars))
         .and_then(render_handler);
 

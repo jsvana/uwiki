@@ -7,6 +7,7 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0"
 bcrypt = "0.10"
+csrf = "0.4.0"
 dotenv = "0.15"
 handlebars = "4.0"
 log = "0.4"
@@ -19,3 +20,4 @@ sqlx = { version = "0.5", features = [ "postgres", "runtime-tokio-rustls", "offl
 tokio = { version = "1", features = ["full"] }
 uwiki-types = "0.1"
 warp = "0.3"
+warp-sessions = "1.0.15"

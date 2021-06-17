@@ -18,6 +18,7 @@ use sqlx::{Pool, Postgres};
 use warp::http::StatusCode;
 use warp::path::Tail;
 use warp::Filter;
+use warp_sessions::{CookieOptions, MemoryStore, SameSiteCookieOption, SessionWithStore};
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -26,6 +27,20 @@ pub struct Config {
     token_ttl: Duration,
     wiki_page_template_path: PathBuf,
     error_page_template_path: PathBuf,
+}
+
+pub async fn index_handler(
+    db: Pool<Postgres>,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
+    // TODO(jsvana): template? dynamic page list?
+    Ok((
+        warp::reply::with_status(
+            warp::reply::html("<html>Welcome to uwiki!</html>"),
+            StatusCode::OK,
+        ),
+        session_with_store,
+    ))
 }
 
 pub async fn add_user_handler(
@@ -65,12 +80,17 @@ pub async fn authenticate_handler(
     request: uwiki_types::AuthenticateRequest,
     db: Pool<Postgres>,
     config: Config,
-) -> Result<impl warp::Reply, Infallible> {
+    mut session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            return Ok(warp::reply::json(
-                &uwiki_types::AuthenticateResponse::error(format!("Error authenticating: {}", e)),
+            return Ok((
+                warp::reply::json(&uwiki_types::AuthenticateResponse::error(format!(
+                    "Error authenticating: {}",
+                    e
+                ))),
+                session_with_store,
             ));
         }
     };
@@ -84,17 +104,21 @@ pub async fn authenticate_handler(
     {
         Ok(user) => user,
         Err(_) => {
-            return Ok(warp::reply::json(
-                &uwiki_types::AuthenticateResponse::error(
+            return Ok((
+                warp::reply::json(&uwiki_types::AuthenticateResponse::error(
                     "Invalid username or password".to_string(),
-                ),
+                )),
+                session_with_store,
             ));
         }
     };
 
     if let Ok(false) | Err(_) = verify(request.password, &user.password) {
-        return Ok(warp::reply::json(
-            &uwiki_types::AuthenticateResponse::error("Invalid username or password".to_string()),
+        return Ok((
+            warp::reply::json(&uwiki_types::AuthenticateResponse::error(
+                "Invalid username or password".to_string(),
+            )),
+            session_with_store,
         ));
     }
 
@@ -109,13 +133,24 @@ pub async fn authenticate_handler(
 
     let token = format!("lgn:{}", token);
 
+    if let Err(e) = session_with_store.session.insert("sid", token.clone()) {
+        return Ok((
+            warp::reply::json(&uwiki_types::AuthenticateResponse::error(format!(
+                "Internal error (failed to persist token to session, {})",
+                e
+            ))),
+            session_with_store,
+        ));
+    }
+
     let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(timestamp) => timestamp,
         Err(_) => {
-            return Ok(warp::reply::json(
-                &uwiki_types::AuthenticateResponse::error(
+            return Ok((
+                warp::reply::json(&uwiki_types::AuthenticateResponse::error(
                     "Internal error (time went backwards)".to_string(),
-                ),
+                )),
+                session_with_store,
             ));
         }
     };
@@ -123,10 +158,11 @@ pub async fn authenticate_handler(
     let expiration: i32 = match (now + config.token_ttl).as_secs().try_into() {
         Ok(timestamp) => timestamp,
         Err(_) => {
-            return Ok(warp::reply::json(
-                &uwiki_types::AuthenticateResponse::error(
+            return Ok((
+                warp::reply::json(&uwiki_types::AuthenticateResponse::error(
                     "Internal error (expiration timestamp too large)".to_string(),
-                ),
+                )),
+                session_with_store,
             ));
         }
     };
@@ -140,19 +176,30 @@ pub async fn authenticate_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok(warp::reply::json(
-            &uwiki_types::AuthenticateResponse::error(format!("Error generating token: {}", e)),
+        return Ok((
+            warp::reply::json(&uwiki_types::AuthenticateResponse::error(format!(
+                "Error generating token: {}",
+                e
+            ))),
+            session_with_store,
         ));
     }
 
     match tx.commit().await {
-        Ok(_) => Ok(warp::reply::json(&uwiki_types::AuthenticateResponse {
-            success: true,
-            message: "Logged in successfully".to_string(),
-            token: Some(token),
-        })),
-        Err(e) => Ok(warp::reply::json(
-            &uwiki_types::AuthenticateResponse::error(format!("Error generating token: {}", e)),
+        Ok(_) => Ok((
+            warp::reply::json(&uwiki_types::AuthenticateResponse {
+                success: true,
+                message: "Logged in successfully".to_string(),
+                token: Some(token),
+            }),
+            session_with_store,
+        )),
+        Err(e) => Ok((
+            warp::reply::json(&uwiki_types::AuthenticateResponse::error(format!(
+                "Error generating token: {}",
+                e
+            ))),
+            session_with_store,
         )),
     }
 }
@@ -272,13 +319,18 @@ async fn set_page_handler(
 async fn get_page_handler(
     request: uwiki_types::GetPageRequest,
     db: Pool<Postgres>,
-) -> Result<impl warp::Reply, Infallible> {
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            return Ok(warp::reply::json(&uwiki_types::GetPageResponse::error(
-                format!("Error getting page: {}", e),
-            )));
+            return Ok((
+                warp::reply::json(&uwiki_types::GetPageResponse::error(format!(
+                    "Error getting page: {}",
+                    e
+                ))),
+                session_with_store,
+            ));
         }
     };
 
@@ -293,9 +345,12 @@ async fn get_page_handler(
     {
         Ok(row) => row.user_id,
         Err(_) => {
-            return Ok(warp::reply::json(&uwiki_types::GetPageResponse::error(
-                "Invalid API token (can't claim a page without an API token)".to_string(),
-            )));
+            return Ok((
+                warp::reply::json(&uwiki_types::GetPageResponse::error(
+                    "Invalid API token (can't claim a page without an API token)".to_string(),
+                )),
+                session_with_store,
+            ));
         }
     };
 
@@ -307,9 +362,13 @@ async fn get_page_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok(warp::reply::json(&uwiki_types::GetPageResponse::error(
-            format!("Error getting page: {}", e),
-        )));
+        return Ok((
+            warp::reply::json(&uwiki_types::GetPageResponse::error(format!(
+                "Error getting page: {}",
+                e
+            ))),
+            session_with_store,
+        ));
     }
 
     let page = match sqlx::query!(
@@ -321,23 +380,34 @@ async fn get_page_handler(
     {
         Ok(page) => page,
         Err(e) => {
-            return Ok(warp::reply::json(&uwiki_types::GetPageResponse::error(
-                format!("Error getting page: {}", e),
-            )));
+            return Ok((
+                warp::reply::json(&uwiki_types::GetPageResponse::error(format!(
+                    "Error getting page: {}",
+                    e
+                ))),
+                session_with_store,
+            ));
         }
     };
 
     match tx.commit().await {
-        Ok(_) => Ok(warp::reply::json(&uwiki_types::GetPageResponse {
-            success: true,
-            message: "paged fetched successfully".to_string(),
-            title: page.title,
-            body: page.body,
-            version: Some(page.current_version),
-        })),
-        Err(e) => Ok(warp::reply::json(&uwiki_types::GetPageResponse::error(
-            format!("Error updating page: {}", e),
-        ))),
+        Ok(_) => Ok((
+            warp::reply::json(&uwiki_types::GetPageResponse {
+                success: true,
+                message: "paged fetched successfully".to_string(),
+                title: page.title,
+                body: page.body,
+                version: Some(page.current_version),
+            }),
+            session_with_store,
+        )),
+        Err(e) => Ok((
+            warp::reply::json(&uwiki_types::GetPageResponse::error(format!(
+                "Error updating page: {}",
+                e
+            ))),
+            session_with_store,
+        )),
     }
 }
 
@@ -486,6 +556,28 @@ async fn main() -> Result<()> {
         .register_template_string("error_page", error_page_template)
         .context("failed to register error template")?;
 
+    let session_store = MemoryStore::new();
+
+    let index = warp::get()
+        .and(warp::path::end())
+        .and(with_db(pool.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            Some(CookieOptions {
+                cookie_name: "sid",
+                cookie_value: None,
+                max_age: None,
+                domain: None,
+                path: None,
+                secure: false,
+                http_only: true,
+                same_site: Some(SameSiteCookieOption::Strict),
+            }),
+        ))
+        .and_then(index_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session);
+
     let add_user = warp::post()
         .and(warp::path("u"))
         .and(warp::body::content_length_limit(1024 * 16))
@@ -499,7 +591,13 @@ async fn main() -> Result<()> {
         .and(warp::body::json())
         .and(with_db(pool.clone()))
         .and(with_config(config.clone()))
-        .and_then(authenticate_handler);
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(authenticate_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session);
 
     let render_wiki = warp::get()
         .and(warp::path("w"))
@@ -513,7 +611,10 @@ async fn main() -> Result<()> {
         .and(warp::body::content_length_limit(1024 * 16))
         .and(warp::body::json())
         .and(with_db(pool.clone()))
-        .and_then(get_page_handler);
+        .and(warp_sessions::request::with_session(session_store, None))
+        .and_then(get_page_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session);
 
     let set_page = warp::post()
         .and(warp::path("s"))
@@ -525,7 +626,8 @@ async fn main() -> Result<()> {
     info!("Starting server at {}", config.bind_address);
 
     warp::serve(
-        add_user
+        index
+            .or(add_user)
             .or(authenticate)
             .or(render_wiki)
             .or(get_page)

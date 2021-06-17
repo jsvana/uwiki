@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use handlebars::Handlebars;
+use log::info;
 use maplit::btreemap;
 use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOutput};
 use rand::distributions::Alphanumeric;
@@ -18,7 +19,7 @@ use warp::http::StatusCode;
 use warp::path::Tail;
 use warp::Filter;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     bind_address: SocketAddr,
     database_url: String,
@@ -430,32 +431,60 @@ fn with_templates(
 #[tokio::main]
 async fn main() -> Result<()> {
     if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "uwiki=info");
+        std::env::set_var("RUST_LOG", "info");
     }
     pretty_env_logger::init();
 
     let config = Config {
         bind_address: dotenv::var("BIND_ADDRESS")
             .unwrap_or_else(|_| "0.0.0.0:1181".to_string())
-            .parse()?,
+            .parse()
+            .context("failed to parse BIND_ADDRESS")?,
         database_url: dotenv::var("DATABASE_URL").context("Missing env var $DATABASE_URL")?,
         token_ttl: Duration::from_secs(
             dotenv::var("TOKEN_TTL_SECONDS")
                 .unwrap_or_else(|_| "604800".to_string()) // Defaults to one week
-                .parse()?,
+                .parse()
+                .context("failed to parse TOKEN_TTL_SECONDS")?,
         ),
         wiki_page_template_path: dotenv::var("WIKI_PAGE_TEMPLATE_PATH")
             .context("Missing env var $WIKI_PAGE_TEMPLATE_PATH")?
-            .parse()?,
+            .parse()
+            .context("failed to parse WIKI_PAGE_TEMPLATE_PATH")?,
         error_page_template_path: dotenv::var("ERROR_PAGE_TEMPLATE_PATH")
             .context("Missing env var $ERROR_PAGE_TEMPLATE_PATH")?
-            .parse()?,
+            .parse()
+            .context("failed to parse ERROR_PAGE_TEMPLATE_PATH")?,
     };
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&config.database_url)
-        .await?;
+        .await
+        .context("failed to create Postgres connection pool")?;
+
+    let wiki_page_template = std::fs::read_to_string(config.wiki_page_template_path.clone())
+        .with_context(|| {
+            format!(
+                "failed to read wiki template {:?}",
+                config.wiki_page_template_path
+            )
+        })?;
+    let error_page_template = std::fs::read_to_string(config.error_page_template_path.clone())
+        .with_context(|| {
+            format!(
+                "failed to read error template {:?}",
+                config.error_page_template_path
+            )
+        })?;
+
+    let mut handlebars = Handlebars::new();
+    handlebars
+        .register_template_string("wiki_page", wiki_page_template)
+        .context("failed to register wiki template")?;
+    handlebars
+        .register_template_string("error_page", error_page_template)
+        .context("failed to register error template")?;
 
     let add_user = warp::post()
         .and(warp::path("u"))
@@ -471,13 +500,6 @@ async fn main() -> Result<()> {
         .and(with_db(pool.clone()))
         .and(with_config(config.clone()))
         .and_then(authenticate_handler);
-
-    let wiki_page_template = std::fs::read_to_string(config.wiki_page_template_path.clone())?;
-    let error_page_template = std::fs::read_to_string(config.error_page_template_path.clone())?;
-
-    let mut handlebars = Handlebars::new();
-    handlebars.register_template_string("wiki_page", wiki_page_template)?;
-    handlebars.register_template_string("error_page", error_page_template)?;
 
     let render_wiki = warp::get()
         .and(warp::path("w"))
@@ -499,6 +521,8 @@ async fn main() -> Result<()> {
         .and(warp::body::json())
         .and(with_db(pool))
         .and_then(set_page_handler);
+
+    info!("Starting server at {}", config.bind_address);
 
     warp::serve(
         add_user

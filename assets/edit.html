@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Edit {{slug}}</title>
+  </head>
+  <body>
+    <form action="/s/{{slug}}" method="post">
+      <input type="hidden" name="previous_version" value="{{version}}" />
+
+      <label for="title">Title:</label>
+      <input name="title" value="{{title}}" />
+
+      <label for="body">Body:</label>
+      <textarea name="body">{{body}}</textarea>
+
+      <input type="submit" value="Submit" />
+    </form>
+  </body>
+</html>

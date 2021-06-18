@@ -19,6 +19,7 @@ Configuration is done through environment variables.
 **Required:**
 * `DATABASE_URL`: database connection string
 * `WIKI_PAGE_TEMPLATE_PATH`: location of HTML template used to render wiki pages
+* `EDIT_PAGE_TEMPLATE_PATH`: location of HTML template used to render wiki edit pages
 * `ERROR_PAGE_TEMPLATE_PATH`: location of HTML template used to error pages
 
 **Optional**:

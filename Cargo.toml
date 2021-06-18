@@ -18,6 +18,6 @@ rand = "0.8"
 serde = "1.0"
 sqlx = { version = "0.5", features = [ "postgres", "runtime-tokio-rustls", "offline" ] }
 tokio = { version = "1", features = ["full"] }
-uwiki-types = "0.1"
+uwiki-types = "0.2"
 warp = "0.3"
 warp-sessions = "1.0.15"

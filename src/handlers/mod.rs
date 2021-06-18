@@ -37,7 +37,6 @@ pub fn with_templates(
 }
 
 pub async fn index_handler(
-    db: Pool<Postgres>,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
     // TODO(jsvana): template? dynamic page list?
@@ -83,6 +82,30 @@ pub async fn add_user_handler(
     }
 }
 
+pub async fn login_handler(
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
+    Ok((
+        warp::reply::with_status(
+            warp::reply::html(
+                r#"<html>
+  <body>
+    <form action="/a" method="post">
+      <label for="username">Username:</label>
+      <input type="text" name="username" />
+      <label for="password">Password:</label>
+      <input type="password" name="password" />
+      <input type="submit" value="Login" />
+    </form>
+  </body>
+</html>"#,
+            ),
+            StatusCode::OK,
+        ),
+        session_with_store,
+    ))
+}
+
 pub async fn authenticate_handler(
     request: uwiki_types::AuthenticateRequest,
     db: Pool<Postgres>,
@@ -93,10 +116,10 @@ pub async fn authenticate_handler(
         Ok(tx) => tx,
         Err(e) => {
             return Ok((
-                warp::reply::json(&uwiki_types::AuthenticateResponse::error(format!(
-                    "Error authenticating: {}",
+                warp::reply::html(format!(
+                    r#"<html>Error authenticating: {}<br/><a href="/login">Try again</a></html>"#,
                     e
-                ))),
+                )),
                 session_with_store,
             ));
         }
@@ -112,9 +135,9 @@ pub async fn authenticate_handler(
         Ok(user) => user,
         Err(_) => {
             return Ok((
-                warp::reply::json(&uwiki_types::AuthenticateResponse::error(
-                    "Invalid username or password".to_string(),
-                )),
+                warp::reply::html(
+                    r#"<html>Invalid username or password<br/><a href="/login">Try again</a></html>"#.to_string(),
+                ),
                 session_with_store,
             ));
         }
@@ -122,9 +145,10 @@ pub async fn authenticate_handler(
 
     if let Ok(false) | Err(_) = verify(request.password, &user.password) {
         return Ok((
-            warp::reply::json(&uwiki_types::AuthenticateResponse::error(
-                "Invalid username or password".to_string(),
-            )),
+            warp::reply::html(
+                r#"<html>Invalid username or password<br/><a href="/login">Try again</a></html>"#
+                    .to_string(),
+            ),
             session_with_store,
         ));
     }
@@ -141,22 +165,20 @@ pub async fn authenticate_handler(
     let token = format!("lgn:{}", token);
 
     if let Err(e) = session_with_store.session.insert("sid", token.clone()) {
-        return Ok((
-            warp::reply::json(&uwiki_types::AuthenticateResponse::error(format!(
-                "Internal error (failed to persist token to session, {})",
-                e
-            ))),
-            session_with_store,
-        ));
+        let body = format!(
+            r#"<html>Internal error (failed to persist token to session, {})<br/><a href="/login">Try again</a></html>"#,
+            e
+        );
+        return Ok((warp::reply::html(body), session_with_store));
     }
 
     let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(timestamp) => timestamp,
         Err(_) => {
             return Ok((
-                warp::reply::json(&uwiki_types::AuthenticateResponse::error(
-                    "Internal error (time went backwards)".to_string(),
-                )),
+                warp::reply::html(
+                    r#"<html>Internal error (time went backwards)<br/><a href="/login">Try again</a></html>"#.to_string()
+                ),
                 session_with_store,
             ));
         }
@@ -166,9 +188,9 @@ pub async fn authenticate_handler(
         Ok(timestamp) => timestamp,
         Err(_) => {
             return Ok((
-                warp::reply::json(&uwiki_types::AuthenticateResponse::error(
-                    "Internal error (expiration timestamp too large)".to_string(),
-                )),
+                warp::reply::html(
+                    r#"<html>Internal error (expiration timestamp too large)<br/><a href="/login">Try again</a></html>"#.to_string(),
+                ),
                 session_with_store,
             ));
         }
@@ -183,44 +205,66 @@ pub async fn authenticate_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok((
-            warp::reply::json(&uwiki_types::AuthenticateResponse::error(format!(
-                "Error generating token: {}",
-                e
-            ))),
-            session_with_store,
-        ));
+        let body = format!(
+            r#"<html>Internal error (error generating token: {})<br/><a href="/login">Try again</a></html>"#,
+            e
+        );
+        return Ok((warp::reply::html(body), session_with_store));
     }
 
     match tx.commit().await {
         Ok(_) => Ok((
-            warp::reply::json(&uwiki_types::AuthenticateResponse {
-                success: true,
-                message: "Logged in successfully".to_string(),
-                token: Some(token),
-            }),
+            warp::reply::html("<html>Logged in successfully!</html>".to_string()),
             session_with_store,
         )),
-        Err(e) => Ok((
-            warp::reply::json(&uwiki_types::AuthenticateResponse::error(format!(
-                "Error generating token: {}",
+        Err(e) => {
+            let body = format!(
+                r#"<html>Internal error (error generating token: {})<br/><a href="/login">Try again</a></html>"#,
                 e
-            ))),
-            session_with_store,
-        )),
+            );
+            Ok((warp::reply::html(body), session_with_store))
+        }
     }
 }
 
 pub async fn set_page_handler(
+    tail: Tail,
     request: uwiki_types::SetPageRequest,
     db: Pool<Postgres>,
-) -> Result<impl warp::Reply, Infallible> {
+    templates: Handlebars<'_>,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
+    let slug = tail.as_str().to_string();
+
+    let token = match session_with_store.session.get::<String>("sid") {
+        Some(token) => token,
+        None => {
+            return Ok((
+                Box::new(warp::reply::with_status(
+                    warp::reply::html(error_html(
+                        "Not logged in (can't claim a page without logging in)",
+                        &templates,
+                    )),
+                    StatusCode::FORBIDDEN,
+                )),
+                session_with_store,
+            ));
+        }
+    };
+
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
-                format!("Error setting content: {}", e),
-            )));
+            return Ok((
+                Box::new(warp::reply::with_status(
+                    warp::reply::html(error_html(
+                        &format!("Error setting content: {}", e),
+                        &templates,
+                    )),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )),
+                session_with_store,
+            ));
         }
     };
 
@@ -228,44 +272,69 @@ pub async fn set_page_handler(
         "SELECT user_id FROM tokens \
         WHERE token = $1 \
         AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
-        request.token,
+        token,
     )
     .fetch_one(&mut tx)
     .await
     {
         Ok(row) => row.user_id,
         Err(_) => {
-            return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
-                "Invalid API token".to_string(),
-            )));
+            return Ok((
+                Box::new(warp::reply::with_status(
+                    warp::reply::html(error_html("Invalid API token", &templates)),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )),
+                session_with_store,
+            ));
         }
     };
 
     let page = match sqlx::query!(
         "SELECT owner_id, current_version FROM pages WHERE slug = $1",
-        request.slug,
+        slug,
     )
     .fetch_one(&mut tx)
     .await
     {
         Ok(page) => page,
         Err(e) => {
-            return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
-                format!("Error getting page: {}", e),
-            )));
+            return Ok((
+                Box::new(warp::reply::with_status(
+                    warp::reply::html(error_html(
+                        &format!("Error getting page: {}", e),
+                        &templates,
+                    )),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )),
+                session_with_store,
+            ));
         }
     };
 
     if page.owner_id != user_id {
-        return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
-            "Refusing to modify page you do not own".to_string(),
-        )));
+        return Ok((
+            Box::new(warp::reply::with_status(
+                warp::reply::html(error_html(
+                    "Refusing to modify a page you do not own",
+                    &templates,
+                )),
+                StatusCode::FORBIDDEN,
+            )),
+            session_with_store,
+        ));
     }
 
     if page.current_version != request.previous_version {
-        return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
-            "Page has been updated since fetching. Refusing to update".to_string(),
-        )));
+        return Ok((
+            Box::new(warp::reply::with_status(
+                warp::reply::html(error_html(
+                    "Page has been updated since fetching. Refusing to update",
+                    &templates,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )),
+            session_with_store,
+        ));
     }
 
     let new_version = request.previous_version + 1;
@@ -279,18 +348,29 @@ pub async fn set_page_handler(
         let output = match doc.execute() {
             Ok(output) => output,
             Err(e) => {
-                return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
-                    format!("Error rendering page (failed to run pandoc: {})", e),
-                )));
+                return Ok((
+                    Box::new(warp::reply::with_status(
+                        warp::reply::html(error_html(
+                            &format!("Error rendering page (failed to run Pandoc: {})", e),
+                            &templates,
+                        )),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    )),
+                    session_with_store,
+                ));
             }
         };
 
         match output {
             PandocOutput::ToBuffer(buffer) => buffer,
             _ => {
-                return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
-                    "Malformed Pandoc response".to_string(),
-                )));
+                return Ok((
+                    Box::new(warp::reply::with_status(
+                        warp::reply::html(error_html("Malformed Pandoc response", &templates)),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    )),
+                    session_with_store,
+                ));
             }
         }
     };
@@ -301,33 +381,76 @@ pub async fn set_page_handler(
         request.body,
         rendered_body,
         new_version,
-        request.slug,
+        slug,
     )
     .execute(&mut tx)
     .await
     {
-        return Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
-            format!("Error updating page: {}", e),
-        )));
+        return Ok((
+            Box::new(warp::reply::with_status(
+                warp::reply::html(error_html(
+                    &format!("Error updating page: {}", e),
+                    &templates,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )),
+            session_with_store,
+        ));
     }
 
+    let destination_uri: warp::http::Uri = match format!("/w/{}", slug).parse() {
+        Ok(uri) => uri,
+        Err(e) => {
+            return Ok((
+                Box::new(warp::reply::with_status(
+                    warp::reply::html(error_html(
+                        &format!("Error parsing slug: {}", e),
+                        &templates,
+                    )),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )),
+                session_with_store,
+            ));
+        }
+    };
+
     match tx.commit().await {
-        Ok(_) => Ok(warp::reply::json(&uwiki_types::SetPageResponse {
-            success: true,
-            message: "Updated successfully".to_string(),
-            new_version: Some(new_version),
-        })),
-        Err(e) => Ok(warp::reply::json(&uwiki_types::SetPageResponse::error(
-            format!("Error updating page: {}", e),
-        ))),
+        Ok(_) => Ok((
+            Box::new(warp::redirect(destination_uri)),
+            session_with_store,
+        )),
+        Err(e) => Ok((
+            Box::new(warp::reply::with_status(
+                warp::reply::html(error_html(
+                    &format!("Error updating page: {}", e),
+                    &templates,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )),
+            session_with_store,
+        )),
     }
 }
 
 pub async fn get_page_handler(
-    request: uwiki_types::GetPageRequest,
+    tail: Tail,
     db: Pool<Postgres>,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
+    let slug = tail.as_str().to_string();
+
+    let token = match session_with_store.session.get::<String>("sid") {
+        Some(token) => token,
+        None => {
+            return Ok((
+                warp::reply::json(&uwiki_types::GetPageResponse::error(
+                    "Not logged in (can't claim a page without logging in)".to_string(),
+                )),
+                session_with_store,
+            ));
+        }
+    };
+
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
@@ -345,7 +468,7 @@ pub async fn get_page_handler(
         "SELECT user_id FROM tokens \
         WHERE token = $1 \
         AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
-        request.token,
+        token,
     )
     .fetch_one(&mut tx)
     .await
@@ -364,7 +487,7 @@ pub async fn get_page_handler(
     if let Err(e) = sqlx::query!(
         "INSERT INTO pages (owner_id, slug) VALUES ($1, $2) ON CONFLICT DO NOTHING",
         user_id,
-        request.slug,
+        slug,
     )
     .execute(&mut tx)
     .await
@@ -380,7 +503,7 @@ pub async fn get_page_handler(
 
     let page = match sqlx::query!(
         "SELECT title, body, current_version FROM pages WHERE slug = $1",
-        request.slug,
+        slug,
     )
     .fetch_one(&mut tx)
     .await
@@ -418,8 +541,148 @@ pub async fn get_page_handler(
     }
 }
 
+pub async fn edit_page_handler(
+    tail: Tail,
+    db: Pool<Postgres>,
+    templates: Handlebars<'_>,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
+    let slug = tail.as_str().to_string();
+
+    let mut tx = match db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            return Ok((
+                warp::reply::with_status(
+                    warp::reply::html(error_html(
+                        &format!("Error communicating with database: {}", e),
+                        &templates,
+                    )),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                ),
+                session_with_store,
+            ));
+        }
+    };
+
+    let token = match session_with_store.session.get::<String>("sid") {
+        Some(token) => token,
+        None => {
+            return Ok((
+                warp::reply::with_status(
+                    warp::reply::html(error_html(
+                        "Not logged in (can't claim a page without logging in)",
+                        &templates,
+                    )),
+                    StatusCode::FORBIDDEN,
+                ),
+                session_with_store,
+            ));
+        }
+    };
+
+    let user_id = match sqlx::query!(
+        "SELECT user_id FROM tokens \
+        WHERE token = $1 \
+        AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+        token,
+    )
+    .fetch_one(&mut tx)
+    .await
+    {
+        Ok(row) => row.user_id,
+        Err(_) => {
+            return Ok((
+                warp::reply::with_status(
+                    warp::reply::html(error_html(
+                        "Not logged in (can't claim a page without logging in)",
+                        &templates,
+                    )),
+                    StatusCode::FORBIDDEN,
+                ),
+                session_with_store,
+            ));
+        }
+    };
+
+    if let Err(e) = sqlx::query!(
+        "INSERT INTO pages (owner_id, slug) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        user_id,
+        slug,
+    )
+    .execute(&mut tx)
+    .await
+    {
+        return Ok((
+            warp::reply::with_status(
+                warp::reply::html(error_html(
+                    &format!("Error getting page: {}", e),
+                    &templates,
+                )),
+                StatusCode::NOT_FOUND,
+            ),
+            session_with_store,
+        ));
+    }
+
+    let page = match sqlx::query!(
+        "SELECT title, body, current_version FROM pages WHERE slug = $1",
+        slug,
+    )
+    .fetch_one(&mut tx)
+    .await
+    {
+        Ok(page) => page,
+        Err(e) => {
+            return Ok((
+                warp::reply::with_status(
+                    warp::reply::html(error_html(
+                        &format!("Error getting page: {}", e),
+                        &templates,
+                    )),
+                    StatusCode::NOT_FOUND,
+                ),
+                session_with_store,
+            ));
+        }
+    };
+
+    if let Err(e) = tx.commit().await {
+        return Ok((
+            warp::reply::with_status(
+                warp::reply::html(error_html(
+                    &format!("Error updating page: {}", e),
+                    &templates,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            session_with_store,
+        ));
+    }
+
+    let text = match templates.render(
+        "edit_page",
+        &btreemap! {
+            "slug" => slug,
+            "title" => page.title.unwrap_or_else(|| "".to_string()),
+            "body" => page.body.unwrap_or_else(|| "".to_string()),
+            "version" => page.current_version.to_string(),
+        },
+    ) {
+        Ok(text) => text,
+        Err(e) => {
+            format!("<html>Error: {}</html>", e)
+        }
+    };
+
+    Ok((
+        warp::reply::with_status(warp::reply::html(text), StatusCode::OK),
+        session_with_store,
+    ))
+}
+
 fn error_html(message: &str, templates: &Handlebars) -> String {
-    match templates.render("error_page", &btreemap! { "error" => "No such page" }) {
+    match templates.render("error_page", &btreemap! { "error" => message }) {
         Ok(text) => text,
         Err(e) => {
             format!(

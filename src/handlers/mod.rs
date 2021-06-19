@@ -11,7 +11,7 @@ use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use sqlx::{Pool, Postgres};
-use warp::http::StatusCode;
+use warp::http::{StatusCode, Uri};
 use warp::path::Tail;
 use warp::Filter;
 use warp_sessions::{MemoryStore, SessionWithStore};
@@ -83,13 +83,17 @@ pub async fn add_user_handler(
 }
 
 pub async fn login_handler(
+    //flash: Option<String>,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
+    let flash = session_with_store.session.get::<String>("flash");
+
+    // TODO(jsvana): add asset for this
     Ok((
         warp::reply::with_status(
-            warp::reply::html(
+            warp::reply::html(format!(
                 r#"<html>
-  <body>
+  <body>{}
     <form action="/a" method="post">
       <label for="username">Username:</label>
       <input type="text" name="username" />
@@ -99,43 +103,47 @@ pub async fn login_handler(
     </form>
   </body>
 </html>"#,
-            ),
+                flash.unwrap_or_else(|| "".to_string())
+            )),
             StatusCode::OK,
         ),
         session_with_store,
     ))
 }
 
-fn error_html_reply<T: std::fmt::Display>(
-    message: &str,
-    error: T,
-    session: SessionWithStore<MemoryStore>,
+fn error_redirect(
+    destination_uri: Uri,
+    message: String,
+    mut session_with_store: SessionWithStore<MemoryStore>,
 ) -> (Box<dyn warp::Reply>, SessionWithStore<MemoryStore>) {
-    (
-        Box::new(warp::reply::html(format!(
-            "<html>{}: {}</html>",
-            message, error
-        ))),
-        session,
-    )
+    match session_with_store
+        .session
+        .insert("flash", message.to_string())
+    {
+        Ok(_) => (
+            Box::new(warp::redirect(destination_uri)),
+            session_with_store,
+        ),
+        Err(e) => (
+            Box::new(warp::reply::html(format!(
+                "<html>Internal error (failed to persist flash to session cookie): {}",
+                e
+            ))),
+            session_with_store,
+        ),
+    }
 }
 
-fn error_html_reply_no_error(
-    message: &str,
-    session: SessionWithStore<MemoryStore>,
-) -> (Box<dyn warp::Reply>, SessionWithStore<MemoryStore>) {
-    (
-        Box::new(warp::reply::html(format!("<html>{}</html>", message))),
-        session,
-    )
-}
-
-macro_rules! value_or_error_html {
-    ( $input:expr, $message:expr, $session:expr ) => {{
+macro_rules! value_or_error_redirect {
+    ( $input:expr, $destination_uri:expr, $message:expr, $session:expr ) => {{
         match $input {
             Ok(v) => v,
             Err(e) => {
-                return Ok(error_html_reply($message, e, $session));
+                return Ok(error_redirect(
+                    $destination_uri,
+                    format!("{}: {}", $message, e),
+                    $session,
+                ));
             }
         }
     }};
@@ -148,22 +156,29 @@ pub async fn authenticate_handler(
     mut session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
     // TODO(jsvana): take template and redirect to login page with flash
-    let mut tx = value_or_error_html!(db.begin().await, "Error authenticating", session_with_store);
+    let mut tx = value_or_error_redirect!(
+        db.begin().await,
+        Uri::from_static("/login"),
+        "Error authenticating",
+        session_with_store
+    );
 
-    let user = value_or_error_html!(
+    let user = value_or_error_redirect!(
         sqlx::query!(
             "SELECT id, password FROM users WHERE username = $1",
             request.username,
         )
         .fetch_one(&mut tx)
         .await,
+        Uri::from_static("/login"),
         "Invalid username or password",
         session_with_store
     );
 
     if let Ok(false) | Err(_) = verify(request.password, &user.password) {
-        return Ok(error_html_reply_no_error(
-            "Invalid username or password",
+        return Ok(error_redirect(
+            Uri::from_static("/login"),
+            "Invalid username or password".to_string(),
             session_with_store,
         ));
     }
@@ -180,21 +195,23 @@ pub async fn authenticate_handler(
     let token = format!("lgn:{}", token);
 
     if let Err(e) = session_with_store.session.insert("sid", token.clone()) {
-        return Ok(error_html_reply(
-            "Internal error (failed to persist token to session)",
-            e,
+        return Ok(error_redirect(
+            Uri::from_static("/login"),
+            format!("Internal error (failed to persist token to session): {}", e),
             session_with_store,
         ));
     }
 
-    let now = value_or_error_html!(
+    let now = value_or_error_redirect!(
         SystemTime::now().duration_since(UNIX_EPOCH),
+        Uri::from_static("/login"),
         "Internal error (time went backwards)",
         session_with_store
     );
 
-    let expiration: i32 = value_or_error_html!(
+    let expiration: i32 = value_or_error_redirect!(
         (now + config.token_ttl).as_secs().try_into(),
+        Uri::from_static("/login"),
         "Internal error (expiration timestamp too large)",
         session_with_store
     );
@@ -208,9 +225,9 @@ pub async fn authenticate_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok(error_html_reply(
-            "Internal error (error generating token)",
-            e,
+        return Ok(error_redirect(
+            Uri::from_static("/login"),
+            format!("Internal error (error generating token): {}", e),
             session_with_store,
         ));
     }
@@ -222,9 +239,9 @@ pub async fn authenticate_handler(
             )),
             session_with_store,
         )),
-        Err(e) => Ok(error_html_reply(
-            "Internal error (error persisting data)",
-            e,
+        Err(e) => Ok(error_redirect(
+            Uri::from_static("/login"),
+            format!("Internal error (error persisting data): {}", e),
             session_with_store,
         )),
     }

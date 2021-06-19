@@ -106,49 +106,64 @@ pub async fn login_handler(
     ))
 }
 
+fn error_html_reply<T: std::fmt::Display>(
+    message: &str,
+    error: T,
+    session: SessionWithStore<MemoryStore>,
+) -> (Box<dyn warp::Reply>, SessionWithStore<MemoryStore>) {
+    (
+        Box::new(warp::reply::html(format!(
+            "<html>{}: {}</html>",
+            message, error
+        ))),
+        session,
+    )
+}
+
+fn error_html_reply_no_error(
+    message: &str,
+    session: SessionWithStore<MemoryStore>,
+) -> (Box<dyn warp::Reply>, SessionWithStore<MemoryStore>) {
+    (
+        Box::new(warp::reply::html(format!("<html>{}</html>", message))),
+        session,
+    )
+}
+
+macro_rules! value_or_error_html {
+    ( $input:expr, $message:expr, $session:expr ) => {{
+        match $input {
+            Ok(v) => v,
+            Err(e) => {
+                return Ok(error_html_reply($message, e, $session));
+            }
+        }
+    }};
+}
+
 pub async fn authenticate_handler(
     request: uwiki_types::AuthenticateRequest,
     db: Pool<Postgres>,
     config: Config,
     mut session_with_store: SessionWithStore<MemoryStore>,
-) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
-    let mut tx = match db.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            return Ok((
-                warp::reply::html(format!(
-                    r#"<html>Error authenticating: {}<br/><a href="/login">Try again</a></html>"#,
-                    e
-                )),
-                session_with_store,
-            ));
-        }
-    };
+) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
+    // TODO(jsvana): take template and redirect to login page with flash
+    let mut tx = value_or_error_html!(db.begin().await, "Error authenticating", session_with_store);
 
-    let user = match sqlx::query!(
-        "SELECT id, password FROM users WHERE username = $1",
-        request.username,
-    )
-    .fetch_one(&mut tx)
-    .await
-    {
-        Ok(user) => user,
-        Err(_) => {
-            return Ok((
-                warp::reply::html(
-                    r#"<html>Invalid username or password<br/><a href="/login">Try again</a></html>"#.to_string(),
-                ),
-                session_with_store,
-            ));
-        }
-    };
+    let user = value_or_error_html!(
+        sqlx::query!(
+            "SELECT id, password FROM users WHERE username = $1",
+            request.username,
+        )
+        .fetch_one(&mut tx)
+        .await,
+        "Invalid username or password",
+        session_with_store
+    );
 
     if let Ok(false) | Err(_) = verify(request.password, &user.password) {
-        return Ok((
-            warp::reply::html(
-                r#"<html>Invalid username or password<br/><a href="/login">Try again</a></html>"#
-                    .to_string(),
-            ),
+        return Ok(error_html_reply_no_error(
+            "Invalid username or password",
             session_with_store,
         ));
     }
@@ -165,36 +180,24 @@ pub async fn authenticate_handler(
     let token = format!("lgn:{}", token);
 
     if let Err(e) = session_with_store.session.insert("sid", token.clone()) {
-        let body = format!(
-            r#"<html>Internal error (failed to persist token to session, {})<br/><a href="/login">Try again</a></html>"#,
-            e
-        );
-        return Ok((warp::reply::html(body), session_with_store));
+        return Ok(error_html_reply(
+            "Internal error (failed to persist token to session)",
+            e,
+            session_with_store,
+        ));
     }
 
-    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(timestamp) => timestamp,
-        Err(_) => {
-            return Ok((
-                warp::reply::html(
-                    r#"<html>Internal error (time went backwards)<br/><a href="/login">Try again</a></html>"#.to_string()
-                ),
-                session_with_store,
-            ));
-        }
-    };
+    let now = value_or_error_html!(
+        SystemTime::now().duration_since(UNIX_EPOCH),
+        "Internal error (time went backwards)",
+        session_with_store
+    );
 
-    let expiration: i32 = match (now + config.token_ttl).as_secs().try_into() {
-        Ok(timestamp) => timestamp,
-        Err(_) => {
-            return Ok((
-                warp::reply::html(
-                    r#"<html>Internal error (expiration timestamp too large)<br/><a href="/login">Try again</a></html>"#.to_string(),
-                ),
-                session_with_store,
-            ));
-        }
-    };
+    let expiration: i32 = value_or_error_html!(
+        (now + config.token_ttl).as_secs().try_into(),
+        "Internal error (expiration timestamp too large)",
+        session_with_store
+    );
 
     if let Err(e) = sqlx::query!(
         "INSERT INTO tokens (user_id, token, expiration) VALUES ($1, $2, $3)",
@@ -205,25 +208,25 @@ pub async fn authenticate_handler(
     .execute(&mut tx)
     .await
     {
-        let body = format!(
-            r#"<html>Internal error (error generating token: {})<br/><a href="/login">Try again</a></html>"#,
-            e
-        );
-        return Ok((warp::reply::html(body), session_with_store));
+        return Ok(error_html_reply(
+            "Internal error (error generating token)",
+            e,
+            session_with_store,
+        ));
     }
 
     match tx.commit().await {
         Ok(_) => Ok((
-            warp::reply::html("<html>Logged in successfully!</html>".to_string()),
+            Box::new(warp::reply::html(
+                "<html>Logged in successfully!</html>".to_string(),
+            )),
             session_with_store,
         )),
-        Err(e) => {
-            let body = format!(
-                r#"<html>Internal error (error generating token: {})<br/><a href="/login">Try again</a></html>"#,
-                e
-            );
-            Ok((warp::reply::html(body), session_with_store))
-        }
+        Err(e) => Ok(error_html_reply(
+            "Internal error (error persisting data)",
+            e,
+            session_with_store,
+        )),
     }
 }
 

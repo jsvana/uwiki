@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>{{current_username}} home</title>
+
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/skeleton.css">
+  </head>
+  <body>
+    <div class="container">
+      <div class="row">
+        <h1>{{current_username}} home</h1>
+
+        {{#if pages}}
+          <h4>Pages you own</h4>
+
+          {{#each pages}}
+            <div>
+              <a href="/w/{{this.slug}}">{{this.title}}</a>
+
+              <a href="#">Delete</a>
+            </div>
+          {{/each}}
+        {{else}}
+          <p>No pages yet.</p>
+        {{/if}}
+
+        {{#if images}}
+          <h4>Images you own</h4>
+
+          {{#each images}}
+            <div>
+              <img src="/img/{{this.slug}}" alt="{{this.alt_text}}" />
+
+              <p>Slug: /img/{{this.slug}}</p>
+
+              <a href="#">Delete</a>
+            </div>
+          {{/each}}
+        {{else}}
+          <p>No images yet.</p>
+        {{/if}}
+
+        <div class="row">
+          <a href="/create">Create new page</a>
+          <a href="/images/create">Upload new image</a>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

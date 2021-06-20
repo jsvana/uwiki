@@ -13,7 +13,7 @@
         <h1>uwiki home</h1>
 
         {{#if current_username}}
-          <p>Logged in as {{current_username}}</p>
+          <p>Logged in as <a href="/me">{{current_username}}</a></p>
         {{else}}
           <a href="/login">Login</a>
         {{/if}}
@@ -23,7 +23,7 @@
         {{/if}}
 
         {{#if pages}}
-          <h4>Most recently updated pages</h2>
+          <h4>Most recently updated pages</h4>
 
           {{#each pages}}
             <div>

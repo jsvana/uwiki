@@ -59,6 +59,7 @@ async fn main() -> Result<()> {
         "error",
         "create",
         "upload_image",
+        "user",
     ];
     let mut handlebars = Handlebars::new();
 
@@ -238,6 +239,19 @@ async fn main() -> Result<()> {
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
 
+    let user = warp::get()
+        .and(warp::path("me"))
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::user_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
     info!("Starting server at {}", config.bind_address);
 
     warp::serve(
@@ -253,7 +267,8 @@ async fn main() -> Result<()> {
             .or(create_page)
             .or(persist_new_page)
             .or(upload_image)
-            .or(persist_new_image),
+            .or(persist_new_image)
+            .or(user),
     )
     .run(config.bind_address)
     .await;

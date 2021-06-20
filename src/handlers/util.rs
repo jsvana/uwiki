@@ -37,8 +37,14 @@ pub fn error_html(
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct Page {
-    slug: String,
-    title: Option<String>,
+    pub slug: String,
+    pub title: Option<String>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Image {
+    pub slug: Option<String>,
+    pub alt_text: Option<String>,
 }
 
 pub async fn get_current_username(

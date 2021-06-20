@@ -22,7 +22,7 @@ use warp_sessions::{MemoryStore, SessionWithStore};
 
 use crate::handlers::util::{
     attempt_to_set_flash, error_html, error_redirect, get_and_clear_flash, get_current_username,
-    HandlerReturn, Page,
+    HandlerReturn, Image, Page,
 };
 use crate::{value_or_error_redirect, Config};
 
@@ -53,7 +53,8 @@ pub async fn index_handler(
 
     let current_username = get_current_username(&db, &session_with_store).await;
 
-    let pages = match sqlx::query_as::<_, Page>(
+    let pages = match sqlx::query_as!(
+        Page,
         "SELECT slug, title FROM pages \
         ORDER BY updated_at DESC \
         LIMIT 3",
@@ -1023,7 +1024,7 @@ pub async fn persist_new_image_handler(
     let mut slug: Option<String> = None;
     let mut alt_text: Option<String> = None;
     let mut image_data: Option<Vec<u8>> = None;
-    let mut image_type: Option<String> = None;
+    let mut extension: Option<String> = None;
 
     for mut part in parts {
         match part.name() {
@@ -1046,7 +1047,7 @@ pub async fn persist_new_image_handler(
                 );
             }
             "file" => {
-                image_type = Some({
+                extension = Some({
                     let content_type = part.content_type();
                     match content_type {
                         Some(file_type) if file_type.starts_with("image/") => {
@@ -1077,9 +1078,9 @@ pub async fn persist_new_image_handler(
     let slug = slug.ok_or_else(|| warp::reject::reject())?;
     let alt_text = alt_text.ok_or_else(|| warp::reject::reject())?;
     let image_data = image_data.ok_or_else(|| warp::reject::reject())?;
-    let image_type = image_type.ok_or_else(|| warp::reject::reject())?;
+    let extension = extension.ok_or_else(|| warp::reject::reject())?;
 
-    let filename = format!("./assets/img/{}.{}", slug, image_type);
+    let filename = format!("./assets/img/{}.{}", slug, extension);
 
     // TODO(jsvana): add flash for existing file
     let mut file = OpenOptions::new()
@@ -1096,12 +1097,12 @@ pub async fn persist_new_image_handler(
     if let Err(e) = sqlx::query!(
         r#"
         INSERT INTO images
-        (owner_id, slug, filename, alt)
+        (owner_id, slug, extension, alt_text)
         VALUES
         ($1, $2, $3, $4)"#,
         user_id,
         slug,
-        filename,
+        extension,
         alt_text,
     )
     .execute(&mut tx)
@@ -1129,4 +1130,125 @@ pub async fn persist_new_image_handler(
             session_with_store,
         )),
     }
+}
+
+pub async fn user_handler(
+    db: Pool<Postgres>,
+    templates: Handlebars<'_>,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
+    let (flash, session_with_store) = get_and_clear_flash(session_with_store);
+
+    let token = match session_with_store.session.get::<String>("sid") {
+        Some(token) => token,
+        None => {
+            return Ok(error_redirect(
+                Uri::from_static("/"),
+                "Not logged in".to_string(),
+                session_with_store,
+            ));
+        }
+    };
+
+    let mut tx = match db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            return Ok(error_html(
+                &format!("Error generating user page: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
+                session_with_store,
+            ));
+        }
+    };
+
+    let (user_id, username) = match sqlx::query!(
+        "SELECT users.id AS user_id, users.username AS username
+        FROM tokens \
+        LEFT JOIN users
+        ON users.id = tokens.user_id
+        WHERE token = $1 \
+        AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+        token,
+    )
+    .fetch_one(&mut tx)
+    .await
+    {
+        Ok(row) => (row.user_id, row.username),
+        Err(_) => {
+            return Ok(error_redirect(
+                Uri::from_static("/"),
+                "Not logged in".to_string(),
+                session_with_store,
+            ));
+        }
+    };
+
+    let pages = match sqlx::query_as!(
+        Page,
+        "SELECT slug, title FROM pages \
+        WHERE owner_id = $1",
+        user_id
+    )
+    .fetch_all(&db)
+    .await
+    {
+        Ok(pages) => pages,
+        Err(e) => {
+            return Ok(error_html(
+                &format!("Unable to fetch owned pages: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
+                session_with_store,
+            ));
+        }
+    };
+
+    let pages = match pages.len() {
+        0 => None,
+        _ => Some(pages),
+    };
+
+    let images = match sqlx::query_as!(
+        Image,
+        "SELECT CONCAT(slug, '.', extension) AS slug, alt_text FROM images \
+        WHERE owner_id = $1",
+        user_id
+    )
+    .fetch_all(&db)
+    .await
+    {
+        Ok(images) => images,
+        Err(e) => {
+            return Ok(error_html(
+                &format!("Unable to fetch owned images: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
+                session_with_store,
+            ));
+        }
+    };
+
+    let images = match images.len() {
+        0 => None,
+        _ => Some(images),
+    };
+
+    let text = match templates.render(
+        "user",
+        &json!({ "flash": flash, "pages": pages, "images": images, "current_username": username}),
+    ) {
+        Ok(text) => text,
+        Err(e) => {
+            format!("<html>Error rendering user template: {}</html>", e)
+        }
+    };
+
+    Ok((
+        Box::new(warp::reply::with_status(
+            warp::reply::html(text),
+            StatusCode::OK,
+        )),
+        session_with_store,
+    ))
 }

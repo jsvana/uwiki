@@ -83,30 +83,20 @@ pub async fn add_user_handler(
 }
 
 pub async fn login_handler(
-    //flash: Option<String>,
+    templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
     let flash = session_with_store.session.get::<String>("flash");
 
-    // TODO(jsvana): add asset for this
+    let text = match templates.render("login", &btreemap! { "flash" => flash }) {
+        Ok(text) => text,
+        Err(e) => {
+            format!("<html>Error: {}</html>", e)
+        }
+    };
+
     Ok((
-        warp::reply::with_status(
-            warp::reply::html(format!(
-                r#"<html>
-  <body>{}
-    <form action="/a" method="post">
-      <label for="username">Username:</label>
-      <input type="text" name="username" />
-      <label for="password">Password:</label>
-      <input type="password" name="password" />
-      <input type="submit" value="Login" />
-    </form>
-  </body>
-</html>"#,
-                flash.unwrap_or_else(|| "".to_string())
-            )),
-            StatusCode::OK,
-        ),
+        warp::reply::with_status(warp::reply::html(text), StatusCode::OK),
         session_with_store,
     ))
 }
@@ -681,7 +671,7 @@ pub async fn edit_page_handler(
     }
 
     let text = match templates.render(
-        "edit_page",
+        "edit",
         &btreemap! {
             "slug" => slug,
             "title" => page.title.unwrap_or_else(|| "".to_string()),
@@ -702,7 +692,7 @@ pub async fn edit_page_handler(
 }
 
 fn error_html(message: &str, templates: &Handlebars) -> String {
-    match templates.render("error_page", &btreemap! { "error" => message }) {
+    match templates.render("error", &btreemap! { "error" => message }) {
         Ok(text) => text,
         Err(e) => {
             format!(
@@ -755,7 +745,7 @@ pub async fn render_handler(
     };
 
     let text = match templates.render(
-        "wiki_page",
+        "wiki",
         &btreemap! { "title" => title, "body" => rendered_body },
     ) {
         Ok(text) => text,

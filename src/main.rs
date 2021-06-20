@@ -16,9 +16,7 @@ pub struct Config {
     bind_address: SocketAddr,
     database_url: String,
     token_ttl: Duration,
-    wiki_page_template_path: PathBuf,
-    edit_page_template_path: PathBuf,
-    error_page_template_path: PathBuf,
+    asset_template_path: PathBuf,
 }
 
 #[tokio::main]
@@ -40,18 +38,10 @@ async fn main() -> Result<()> {
                 .parse()
                 .context("failed to parse TOKEN_TTL_SECONDS")?,
         ),
-        wiki_page_template_path: dotenv::var("WIKI_PAGE_TEMPLATE_PATH")
-            .context("Missing env var $WIKI_PAGE_TEMPLATE_PATH")?
+        asset_template_path: dotenv::var("ASSET_TEMPLATE_PATH")
+            .context("Missing env var $ASSET_TEMPLATE_PATH")?
             .parse()
-            .context("failed to parse WIKI_PAGE_TEMPLATE_PATH")?,
-        edit_page_template_path: dotenv::var("EDIT_PAGE_TEMPLATE_PATH")
-            .context("Missing env var $EDIT_PAGE_TEMPLATE_PATH")?
-            .parse()
-            .context("failed to parse EDIT_PAGE_TEMPLATE_PATH")?,
-        error_page_template_path: dotenv::var("ERROR_PAGE_TEMPLATE_PATH")
-            .context("Missing env var $ERROR_PAGE_TEMPLATE_PATH")?
-            .parse()
-            .context("failed to parse ERROR_PAGE_TEMPLATE_PATH")?,
+            .context("failed to parse ASSET_TEMPLATE_PATH")?,
     };
 
     let pool = PgPoolOptions::new()
@@ -60,39 +50,19 @@ async fn main() -> Result<()> {
         .await
         .context("failed to create Postgres connection pool")?;
 
-    // TODO(jsvana): make template config a dir and assume specific files exist
-    let wiki_page_template = std::fs::read_to_string(config.wiki_page_template_path.clone())
-        .with_context(|| {
-            format!(
-                "failed to read wiki template {:?}",
-                config.wiki_page_template_path
-            )
-        })?;
-    let edit_page_template = std::fs::read_to_string(config.edit_page_template_path.clone())
-        .with_context(|| {
-            format!(
-                "failed to read edit template {:?}",
-                config.edit_page_template_path
-            )
-        })?;
-    let error_page_template = std::fs::read_to_string(config.error_page_template_path.clone())
-        .with_context(|| {
-            format!(
-                "failed to read error template {:?}",
-                config.error_page_template_path
-            )
-        })?;
-
+    let templates = vec!["login", "wiki", "edit", "error"];
     let mut handlebars = Handlebars::new();
-    handlebars
-        .register_template_string("wiki_page", wiki_page_template)
-        .context("failed to register wiki template")?;
-    handlebars
-        .register_template_string("edit_page", edit_page_template)
-        .context("failed to register edit template")?;
-    handlebars
-        .register_template_string("error_page", error_page_template)
-        .context("failed to register error template")?;
+
+    for template in templates {
+        let path = config
+            .asset_template_path
+            .join(format!("{}.html", template));
+        let page_template = std::fs::read_to_string(path.clone())
+            .with_context(|| format!("failed to read {} template {:?}", template, path))?;
+        handlebars
+            .register_template_string(template, page_template)
+            .with_context(|| format!("failed to register {} template", template))?;
+    }
 
     let session_store = MemoryStore::new();
 
@@ -124,6 +94,7 @@ async fn main() -> Result<()> {
 
     let login = warp::get()
         .and(warp::path("login"))
+        .and(handlers::with_templates(handlebars.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
             None,

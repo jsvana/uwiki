@@ -283,8 +283,6 @@ async fn main() -> Result<()> {
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
 
-    // TODO(jsvana): page and image delete
-
     info!("Starting server at {}", config.bind_address);
 
     warp::serve(

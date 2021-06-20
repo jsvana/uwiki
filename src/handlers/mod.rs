@@ -10,6 +10,8 @@ use maplit::btreemap;
 use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
+use serde_derive::Serialize;
+use serde_json::json;
 use sqlx::{Pool, Postgres};
 use warp::http::{StatusCode, Uri};
 use warp::path::Tail;
@@ -36,12 +38,14 @@ pub fn with_templates(
     warp::any().map(move || templates.clone())
 }
 
+type HandlerReturn = (Box<dyn warp::Reply>, SessionWithStore<MemoryStore>);
+
 fn error_html(
     message: &str,
     status_code: StatusCode,
     templates: &Handlebars,
     session_with_store: SessionWithStore<MemoryStore>,
-) -> (Box<dyn warp::Reply>, SessionWithStore<MemoryStore>) {
+) -> HandlerReturn {
     let text = match templates.render("error", &btreemap! { "error" => message }) {
         Ok(text) => text,
         Err(e) => {
@@ -61,15 +65,50 @@ fn error_html(
     )
 }
 
+#[derive(Serialize, sqlx::FromRow)]
+struct Page {
+    slug: String,
+    title: Option<String>,
+}
+
 pub async fn index_handler(
+    db: Pool<Postgres>,
+    templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
-) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
-    // TODO(jsvana): template? dynamic page list?
+) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
+    let flash = session_with_store.session.get::<String>("flash");
+
+    let pages = match sqlx::query_as::<_, Page>(
+        "SELECT slug, title FROM pages \
+        ORDER BY updated_at DESC \
+        LIMIT 3",
+    )
+    .fetch_all(&db)
+    .await
+    {
+        Ok(pages) => pages,
+        Err(_) => {
+            return Ok(error_html(
+                "Unable to fetch recently updated pages",
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
+                session_with_store,
+            ));
+        }
+    };
+
+    let text = match templates.render("index", &json!({ "flash": flash, "pages": Some(pages) })) {
+        Ok(text) => text,
+        Err(e) => {
+            format!("<html>Error loading index: {}</html>", e)
+        }
+    };
+
     Ok((
-        warp::reply::with_status(
-            warp::reply::html("<html>Welcome to uwiki!</html>"),
+        Box::new(warp::reply::with_status(
+            warp::reply::html(text),
             StatusCode::OK,
-        ),
+        )),
         session_with_store,
     ))
 }
@@ -130,7 +169,7 @@ fn error_redirect(
     destination_uri: Uri,
     message: String,
     mut session_with_store: SessionWithStore<MemoryStore>,
-) -> (Box<dyn warp::Reply>, SessionWithStore<MemoryStore>) {
+) -> HandlerReturn {
     match session_with_store
         .session
         .insert("flash", message.to_string())
@@ -169,7 +208,7 @@ pub async fn authenticate_handler(
     db: Pool<Postgres>,
     config: Config,
     mut session_with_store: SessionWithStore<MemoryStore>,
-) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
+) -> Result<HandlerReturn, warp::Rejection> {
     // TODO(jsvana): take template and redirect to login page with flash
     let mut tx = value_or_error_redirect!(
         db.begin().await,
@@ -268,7 +307,7 @@ pub async fn set_page_handler(
     db: Pool<Postgres>,
     templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
-) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
+) -> Result<HandlerReturn, warp::Rejection> {
     let slug = tail.as_str().to_string();
 
     let token = match session_with_store.session.get::<String>("sid") {
@@ -552,7 +591,7 @@ pub async fn edit_page_handler(
     db: Pool<Postgres>,
     templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
-) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
+) -> Result<HandlerReturn, warp::Rejection> {
     let slug = tail.as_str().to_string();
 
     let mut tx = match db.begin().await {
@@ -671,7 +710,7 @@ pub async fn render_handler(
     db: Pool<Postgres>,
     templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
-) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), Infallible> {
+) -> Result<HandlerReturn, Infallible> {
     let page = match sqlx::query!(
         "SELECT title, rendered_body FROM pages WHERE slug = $1",
         tail.as_str()

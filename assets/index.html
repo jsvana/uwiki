@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>uwiki home</title>
+  </head>
+  <body>
+    <h1>uwiki home</h1>
+
+    {{#if flash}}
+      <p>{{flash}}</p>
+    {{/if}}
+
+    {{#if pages}}
+      <h2>Most recently updated pages</h2>
+
+      {{#each pages}}
+        <a href="/w/{{this.slug}}">{{this.title}}</a>
+      {{/each}}
+    {{else}}
+      <p>No pages yet.</p>
+    {{/if}}
+  </body>
+</html>

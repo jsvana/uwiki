@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
         .await
         .context("failed to create Postgres connection pool")?;
 
-    let templates = vec!["login", "wiki", "edit", "error"];
+    let templates = vec!["index", "login", "wiki", "edit", "error"];
     let mut handlebars = Handlebars::new();
 
     for template in templates {
@@ -68,6 +68,8 @@ async fn main() -> Result<()> {
 
     let index = warp::get()
         .and(warp::path::end())
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
             Some(CookieOptions {

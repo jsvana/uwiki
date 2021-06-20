@@ -766,10 +766,10 @@ pub async fn create_page_handler(
 
     let current_username = get_current_username(&db, &session_with_store).await;
 
-    session_with_store =
-        attempt_to_set_flash("Must be logged in to create a page", session_with_store);
-
     if let None = current_username {
+        session_with_store =
+            attempt_to_set_flash("Must be logged in to create a page", session_with_store);
+
         return Ok((
             Box::new(warp::redirect::see_other(Uri::from_static("/login"))),
             session_with_store,

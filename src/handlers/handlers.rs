@@ -1211,7 +1211,7 @@ pub async fn user_handler(
 
     let images = match sqlx::query_as!(
         Image,
-        "SELECT CONCAT(slug, '.', extension) AS slug, alt_text FROM images \
+        "SELECT CONCAT(slug, '.', extension) AS slug_with_extension, slug, alt_text FROM images \
         WHERE owner_id = $1",
         user_id
     )
@@ -1251,4 +1251,176 @@ pub async fn user_handler(
         )),
         session_with_store,
     ))
+}
+
+pub async fn delete_page_handler(
+    tail: Tail,
+    db: Pool<Postgres>,
+    templates: Handlebars<'_>,
+    mut session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<HandlerReturn, warp::Rejection> {
+    let slug = tail.as_str().to_string();
+
+    let token = match session_with_store.session.get::<String>("sid") {
+        Some(token) => token,
+        None => {
+            return Ok(error_redirect(
+                Uri::from_static("/login"),
+                "Not logged in".to_string(),
+                session_with_store,
+            ));
+        }
+    };
+
+    let mut tx = match db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            // TODO(jsvana): should these be redirects w/ flashes instead?
+            return Ok(error_html(
+                &format!("Error deleting page: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
+                session_with_store,
+            ));
+        }
+    };
+
+    let user_id = match sqlx::query!(
+        "SELECT user_id FROM tokens \
+        WHERE token = $1 \
+        AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+        token,
+    )
+    .fetch_one(&mut tx)
+    .await
+    {
+        Ok(row) => row.user_id,
+        Err(_) => {
+            return Ok(error_redirect(
+                Uri::from_static("/login"),
+                "Not logged in".to_string(),
+                session_with_store,
+            ));
+        }
+    };
+
+    if let Err(e) = sqlx::query!(
+        r#"
+        DELETE FROM pages
+        WHERE slug = $1 AND owner_id = $2"#,
+        slug,
+        user_id,
+    )
+    .execute(&mut tx)
+    .await
+    {
+        return Ok(error_html(
+            &format!("Error deleting page: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
+            session_with_store,
+        ));
+    }
+
+    session_with_store =
+        attempt_to_set_flash(&format!("Deleted page {}", slug), session_with_store);
+
+    match tx.commit().await {
+        Ok(_) => Ok((
+            Box::new(warp::redirect::see_other(Uri::from_static("/"))),
+            session_with_store,
+        )),
+        Err(e) => Ok(error_html(
+            &format!("Error deleting page: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
+            session_with_store,
+        )),
+    }
+}
+
+pub async fn delete_image_handler(
+    tail: Tail,
+    db: Pool<Postgres>,
+    templates: Handlebars<'_>,
+    mut session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<HandlerReturn, warp::Rejection> {
+    let slug = tail.as_str().to_string();
+
+    let token = match session_with_store.session.get::<String>("sid") {
+        Some(token) => token,
+        None => {
+            return Ok(error_redirect(
+                Uri::from_static("/login"),
+                "Not logged in".to_string(),
+                session_with_store,
+            ));
+        }
+    };
+
+    let mut tx = match db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            // TODO(jsvana): should these be redirects w/ flashes instead?
+            return Ok(error_html(
+                &format!("Error deleting image: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
+                session_with_store,
+            ));
+        }
+    };
+
+    let user_id = match sqlx::query!(
+        "SELECT user_id FROM tokens \
+        WHERE token = $1 \
+        AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+        token,
+    )
+    .fetch_one(&mut tx)
+    .await
+    {
+        Ok(row) => row.user_id,
+        Err(_) => {
+            return Ok(error_redirect(
+                Uri::from_static("/login"),
+                "Not logged in".to_string(),
+                session_with_store,
+            ));
+        }
+    };
+
+    if let Err(e) = sqlx::query!(
+        r#"
+        DELETE FROM images
+        WHERE slug = $1 AND owner_id = $2"#,
+        slug,
+        user_id,
+    )
+    .execute(&mut tx)
+    .await
+    {
+        return Ok(error_html(
+            &format!("Error deleting image: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
+            session_with_store,
+        ));
+    }
+
+    session_with_store =
+        attempt_to_set_flash(&format!("Deleted image {}", slug), session_with_store);
+
+    match tx.commit().await {
+        Ok(_) => Ok((
+            Box::new(warp::redirect::see_other(Uri::from_static("/"))),
+            session_with_store,
+        )),
+        Err(e) => Ok(error_html(
+            &format!("Error deleting image: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
+            session_with_store,
+        )),
+    }
 }

@@ -19,7 +19,9 @@
             <div>
               <a href="/w/{{this.slug}}">{{this.title}}</a>
 
-              <a href="#">Delete</a>
+              <form action="/pages/delete/{{this.slug}}", method="post">
+                <input type="submit" value="Delete" />
+              </form>
             </div>
           {{/each}}
         {{else}}
@@ -31,11 +33,13 @@
 
           {{#each images}}
             <div>
-              <img src="/img/{{this.slug}}" alt="{{this.alt_text}}" />
+              <img src="/img/{{this.slug_with_extension}}" alt="{{this.alt_text}}" />
 
-              <p>Slug: /img/{{this.slug}}</p>
+              <p>Slug: /img/{{this.slug_with_extension}}</p>
 
-              <a href="#">Delete</a>
+              <form action="/images/delete/{{this.slug}}", method="post">
+                <input type="submit" value="Delete" />
+              </form>
             </div>
           {{/each}}
         {{else}}
@@ -43,7 +47,7 @@
         {{/if}}
 
         <div class="row">
-          <a href="/create">Create new page</a>
+          <a href="/pages/create">Create new page</a>
           <a href="/images/create">Upload new image</a>
         </div>
       </div>

@@ -43,7 +43,8 @@ pub struct Page {
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct Image {
-    pub slug: Option<String>,
+    pub slug: String,
+    pub slug_with_extension: Option<String>,
     pub alt_text: Option<String>,
 }
 

@@ -185,6 +185,7 @@ async fn main() -> Result<()> {
         .with(warp::reply::with::headers(headers.clone()));
 
     let create_page = warp::get()
+        .and(warp::path("pages"))
         .and(warp::path("create"))
         .and(handlers::with_templates(handlebars.clone()))
         .and(handlers::with_db(pool.clone()))
@@ -252,6 +253,38 @@ async fn main() -> Result<()> {
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
 
+    let delete_page = warp::post()
+        .and(warp::path("pages"))
+        .and(warp::path("delete"))
+        .and(warp::path::tail())
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::delete_page_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let delete_image = warp::post()
+        .and(warp::path("images"))
+        .and(warp::path("delete"))
+        .and(warp::path::tail())
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::delete_image_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    // TODO(jsvana): page and image delete
+
     info!("Starting server at {}", config.bind_address);
 
     warp::serve(
@@ -268,7 +301,9 @@ async fn main() -> Result<()> {
             .or(persist_new_page)
             .or(upload_image)
             .or(persist_new_image)
-            .or(user),
+            .or(user)
+            .or(delete_page)
+            .or(delete_image),
     )
     .run(config.bind_address)
     .await;

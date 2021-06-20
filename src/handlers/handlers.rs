@@ -1,5 +1,4 @@
-use std::convert::Infallible;
-use std::convert::TryInto;
+use std::convert::{Infallible, TryInto};
 use std::iter;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -9,7 +8,6 @@ use handlebars::Handlebars;
 use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
-use serde_derive::Serialize;
 use serde_json::json;
 use sqlx::{Pool, Postgres};
 use warp::http::{StatusCode, Uri};
@@ -17,7 +15,10 @@ use warp::path::Tail;
 use warp::Filter;
 use warp_sessions::{MemoryStore, SessionWithStore};
 
-use crate::Config;
+use crate::handlers::util::{
+    error_html, error_redirect, get_and_clear_flash, get_current_username, HandlerReturn, Page,
+};
+use crate::{value_or_error_redirect, Config};
 
 pub fn with_db(
     db: Pool<Postgres>,
@@ -35,69 +36,6 @@ pub fn with_templates(
     templates: Handlebars,
 ) -> impl Filter<Extract = (Handlebars,), Error = std::convert::Infallible> + Clone {
     warp::any().map(move || templates.clone())
-}
-
-type HandlerReturn = (Box<dyn warp::Reply>, SessionWithStore<MemoryStore>);
-
-fn error_html(
-    message: &str,
-    status_code: StatusCode,
-    templates: &Handlebars,
-    session_with_store: SessionWithStore<MemoryStore>,
-) -> HandlerReturn {
-    let (flash, session_with_store) = get_and_clear_flash(session_with_store);
-
-    let text = match templates.render("error", &json!({ "error": message , "flash": flash })) {
-        Ok(text) => text,
-        Err(e) => {
-            format!(
-                "<html>Error: {} (hit \"{}\" while generating HTML)</html>",
-                message, e
-            )
-        }
-    };
-
-    (
-        Box::new(warp::reply::with_status(
-            warp::reply::html(text),
-            status_code,
-        )),
-        session_with_store,
-    )
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-struct Page {
-    slug: String,
-    title: Option<String>,
-}
-
-async fn get_current_username(
-    db: &Pool<Postgres>,
-    session_with_store: &SessionWithStore<MemoryStore>,
-) -> Option<String> {
-    let token = match session_with_store.session.get::<String>("sid") {
-        Some(token) => token,
-        None => {
-            return None;
-        }
-    };
-
-    match sqlx::query!(
-        "SELECT users.username AS username \
-        FROM tokens \
-        LEFT JOIN users \
-        ON users.id = tokens.user_id \
-        WHERE token = $1 \
-        AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
-        token,
-    )
-    .fetch_one(db)
-    .await
-    {
-        Ok(row) => Some(row.username),
-        Err(_) => None,
-    }
 }
 
 pub async fn index_handler(
@@ -202,53 +140,6 @@ pub async fn login_handler(
         warp::reply::with_status(warp::reply::html(text), StatusCode::OK),
         session_with_store,
     ))
-}
-
-fn get_and_clear_flash(
-    mut session_with_store: SessionWithStore<MemoryStore>,
-) -> (Option<String>, SessionWithStore<MemoryStore>) {
-    let value = session_with_store.session.get("flash");
-    session_with_store.session.remove("flash");
-
-    (value, session_with_store)
-}
-
-fn error_redirect(
-    destination_uri: Uri,
-    message: String,
-    mut session_with_store: SessionWithStore<MemoryStore>,
-) -> HandlerReturn {
-    match session_with_store
-        .session
-        .insert("flash", message.to_string())
-    {
-        Ok(_) => (
-            Box::new(warp::redirect::see_other(destination_uri)),
-            session_with_store,
-        ),
-        Err(e) => (
-            Box::new(warp::reply::html(format!(
-                "<html>Internal error (failed to persist flash to session cookie): {}",
-                e
-            ))),
-            session_with_store,
-        ),
-    }
-}
-
-macro_rules! value_or_error_redirect {
-    ( $input:expr, $destination_uri:expr, $message:expr, $session:expr ) => {{
-        match $input {
-            Ok(v) => v,
-            Err(e) => {
-                return Ok(error_redirect(
-                    $destination_uri,
-                    format!("{}: {}", $message, e),
-                    $session,
-                ));
-            }
-        }
-    }};
 }
 
 pub async fn authenticate_handler(
@@ -662,15 +553,6 @@ pub async fn edit_page_handler(
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<HandlerReturn, warp::Rejection> {
     let slug = tail.as_str().to_string();
-
-    /*
-    return Ok(error_html(
-        "lol",
-        StatusCode::INTERNAL_SERVER_ERROR,
-        &templates,
-        session_with_store,
-    ));
-    */
 
     let mut tx = match db.begin().await {
         Ok(tx) => tx,

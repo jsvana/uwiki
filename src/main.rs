@@ -121,7 +121,13 @@ async fn main() -> Result<()> {
         .and(warp::path::tail())
         .and(handlers::with_db(pool.clone()))
         .and(handlers::with_templates(handlebars.clone()))
-        .and_then(handlers::render_handler);
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::render_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session);
 
     let get_page = warp::post()
         .and(warp::path("g"))

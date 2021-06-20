@@ -36,6 +36,31 @@ pub fn with_templates(
     warp::any().map(move || templates.clone())
 }
 
+fn error_html(
+    message: &str,
+    status_code: StatusCode,
+    templates: &Handlebars,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> (Box<dyn warp::Reply>, SessionWithStore<MemoryStore>) {
+    let text = match templates.render("error", &btreemap! { "error" => message }) {
+        Ok(text) => text,
+        Err(e) => {
+            format!(
+                "<html>Error: {} (hit \"{}\" while generating HTML)</html>",
+                message, e
+            )
+        }
+    };
+
+    (
+        Box::new(warp::reply::with_status(
+            warp::reply::html(text),
+            status_code,
+        )),
+        session_with_store,
+    )
+}
+
 pub async fn index_handler(
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
@@ -249,14 +274,10 @@ pub async fn set_page_handler(
     let token = match session_with_store.session.get::<String>("sid") {
         Some(token) => token,
         None => {
-            return Ok((
-                Box::new(warp::reply::with_status(
-                    warp::reply::html(error_html(
-                        "Not logged in (can't claim a page without logging in)",
-                        &templates,
-                    )),
-                    StatusCode::FORBIDDEN,
-                )),
+            return Ok(error_html(
+                "Not logged in (can't claim a page without logging in)",
+                StatusCode::FORBIDDEN,
+                &templates,
                 session_with_store,
             ));
         }
@@ -265,14 +286,10 @@ pub async fn set_page_handler(
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            return Ok((
-                Box::new(warp::reply::with_status(
-                    warp::reply::html(error_html(
-                        &format!("Error setting content: {}", e),
-                        &templates,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                )),
+            return Ok(error_html(
+                &format!("Error setting content: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
                 session_with_store,
             ));
         }
@@ -289,11 +306,10 @@ pub async fn set_page_handler(
     {
         Ok(row) => row.user_id,
         Err(_) => {
-            return Ok((
-                Box::new(warp::reply::with_status(
-                    warp::reply::html(error_html("Invalid API token", &templates)),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                )),
+            return Ok(error_html(
+                "Invalid API token",
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
                 session_with_store,
             ));
         }
@@ -308,41 +324,29 @@ pub async fn set_page_handler(
     {
         Ok(page) => page,
         Err(e) => {
-            return Ok((
-                Box::new(warp::reply::with_status(
-                    warp::reply::html(error_html(
-                        &format!("Error getting page: {}", e),
-                        &templates,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                )),
+            return Ok(error_html(
+                &format!("Error getting page: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
                 session_with_store,
             ));
         }
     };
 
     if page.owner_id != user_id {
-        return Ok((
-            Box::new(warp::reply::with_status(
-                warp::reply::html(error_html(
-                    "Refusing to modify a page you do not own",
-                    &templates,
-                )),
-                StatusCode::FORBIDDEN,
-            )),
+        return Ok(error_html(
+            "Refusing to modify a page you do not own",
+            StatusCode::FORBIDDEN,
+            &templates,
             session_with_store,
         ));
     }
 
     if page.current_version != request.previous_version {
-        return Ok((
-            Box::new(warp::reply::with_status(
-                warp::reply::html(error_html(
-                    "Page has been updated since fetching. Refusing to update",
-                    &templates,
-                )),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )),
+        return Ok(error_html(
+            "Page has been updated since fetching. Refusing to update",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
             session_with_store,
         ));
     }
@@ -358,14 +362,10 @@ pub async fn set_page_handler(
         let output = match doc.execute() {
             Ok(output) => output,
             Err(e) => {
-                return Ok((
-                    Box::new(warp::reply::with_status(
-                        warp::reply::html(error_html(
-                            &format!("Error rendering page (failed to run Pandoc: {})", e),
-                            &templates,
-                        )),
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                    )),
+                return Ok(error_html(
+                    &format!("Error rendering page (failed to run Pandoc: {})", e),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &templates,
                     session_with_store,
                 ));
             }
@@ -374,11 +374,10 @@ pub async fn set_page_handler(
         match output {
             PandocOutput::ToBuffer(buffer) => buffer,
             _ => {
-                return Ok((
-                    Box::new(warp::reply::with_status(
-                        warp::reply::html(error_html("Malformed Pandoc response", &templates)),
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                    )),
+                return Ok(error_html(
+                    "Malformed Pandoc response",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &templates,
                     session_with_store,
                 ));
             }
@@ -386,7 +385,16 @@ pub async fn set_page_handler(
     };
 
     if let Err(e) = sqlx::query!(
-        "UPDATE pages SET title = $1, body = $2, rendered_body = $3, current_version = $4 WHERE slug = $5",
+        r#"
+        UPDATE pages
+        SET
+            title = $1,
+            body = $2,
+            rendered_body = $3,
+            current_version = $4,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE
+            slug = $5"#,
         request.title,
         request.body,
         rendered_body,
@@ -396,14 +404,10 @@ pub async fn set_page_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok((
-            Box::new(warp::reply::with_status(
-                warp::reply::html(error_html(
-                    &format!("Error updating page: {}", e),
-                    &templates,
-                )),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )),
+        return Ok(error_html(
+            &format!("Error updating page: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
             session_with_store,
         ));
     }
@@ -411,14 +415,10 @@ pub async fn set_page_handler(
     let destination_uri: warp::http::Uri = match format!("/w/{}", slug).parse() {
         Ok(uri) => uri,
         Err(e) => {
-            return Ok((
-                Box::new(warp::reply::with_status(
-                    warp::reply::html(error_html(
-                        &format!("Error parsing slug: {}", e),
-                        &templates,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                )),
+            return Ok(error_html(
+                &format!("Error parsing slug: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
                 session_with_store,
             ));
         }
@@ -429,14 +429,10 @@ pub async fn set_page_handler(
             Box::new(warp::redirect(destination_uri)),
             session_with_store,
         )),
-        Err(e) => Ok((
-            Box::new(warp::reply::with_status(
-                warp::reply::html(error_html(
-                    &format!("Error updating page: {}", e),
-                    &templates,
-                )),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )),
+        Err(e) => Ok(error_html(
+            &format!("Error updating page: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
             session_with_store,
         )),
     }
@@ -556,20 +552,16 @@ pub async fn edit_page_handler(
     db: Pool<Postgres>,
     templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
-) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
+) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
     let slug = tail.as_str().to_string();
 
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            return Ok((
-                warp::reply::with_status(
-                    warp::reply::html(error_html(
-                        &format!("Error communicating with database: {}", e),
-                        &templates,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ),
+            return Ok(error_html(
+                &format!("Error communicating with database: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
                 session_with_store,
             ));
         }
@@ -578,14 +570,10 @@ pub async fn edit_page_handler(
     let token = match session_with_store.session.get::<String>("sid") {
         Some(token) => token,
         None => {
-            return Ok((
-                warp::reply::with_status(
-                    warp::reply::html(error_html(
-                        "Not logged in (can't claim a page without logging in)",
-                        &templates,
-                    )),
-                    StatusCode::FORBIDDEN,
-                ),
+            return Ok(error_html(
+                "Not logged in (can't claim a page without logging in)",
+                StatusCode::FORBIDDEN,
+                &templates,
                 session_with_store,
             ));
         }
@@ -602,14 +590,10 @@ pub async fn edit_page_handler(
     {
         Ok(row) => row.user_id,
         Err(_) => {
-            return Ok((
-                warp::reply::with_status(
-                    warp::reply::html(error_html(
-                        "Not logged in (can't claim a page without logging in)",
-                        &templates,
-                    )),
-                    StatusCode::FORBIDDEN,
-                ),
+            return Ok(error_html(
+                "Not logged in (can't claim a page without logging in)",
+                StatusCode::FORBIDDEN,
+                &templates,
                 session_with_store,
             ));
         }
@@ -623,14 +607,10 @@ pub async fn edit_page_handler(
     .execute(&mut tx)
     .await
     {
-        return Ok((
-            warp::reply::with_status(
-                warp::reply::html(error_html(
-                    &format!("Error getting page: {}", e),
-                    &templates,
-                )),
-                StatusCode::NOT_FOUND,
-            ),
+        return Ok(error_html(
+            &format!("Error getting page: {}", e),
+            StatusCode::NOT_FOUND,
+            &templates,
             session_with_store,
         ));
     }
@@ -644,28 +624,20 @@ pub async fn edit_page_handler(
     {
         Ok(page) => page,
         Err(e) => {
-            return Ok((
-                warp::reply::with_status(
-                    warp::reply::html(error_html(
-                        &format!("Error getting page: {}", e),
-                        &templates,
-                    )),
-                    StatusCode::NOT_FOUND,
-                ),
+            return Ok(error_html(
+                &format!("Error getting page: {}", e),
+                StatusCode::NOT_FOUND,
+                &templates,
                 session_with_store,
             ));
         }
     };
 
     if let Err(e) = tx.commit().await {
-        return Ok((
-            warp::reply::with_status(
-                warp::reply::html(error_html(
-                    &format!("Error updating page: {}", e),
-                    &templates,
-                )),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ),
+        return Ok(error_html(
+            &format!("Error updating page: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
             session_with_store,
         ));
     }
@@ -686,28 +658,20 @@ pub async fn edit_page_handler(
     };
 
     Ok((
-        warp::reply::with_status(warp::reply::html(text), StatusCode::OK),
+        Box::new(warp::reply::with_status(
+            warp::reply::html(text),
+            StatusCode::OK,
+        )),
         session_with_store,
     ))
-}
-
-fn error_html(message: &str, templates: &Handlebars) -> String {
-    match templates.render("error", &btreemap! { "error" => message }) {
-        Ok(text) => text,
-        Err(e) => {
-            format!(
-                "<html>Error: {} (hit \"{}\" while generating HTML)</html>",
-                message, e
-            )
-        }
-    }
 }
 
 pub async fn render_handler(
     tail: Tail,
     db: Pool<Postgres>,
     templates: Handlebars<'_>,
-) -> Result<impl warp::Reply, Infallible> {
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), Infallible> {
     let page = match sqlx::query!(
         "SELECT title, rendered_body FROM pages WHERE slug = $1",
         tail.as_str()
@@ -717,9 +681,11 @@ pub async fn render_handler(
     {
         Ok(page) => page,
         Err(_) => {
-            return Ok(warp::reply::with_status(
-                warp::reply::html(error_html("No such page", &templates)),
+            return Ok(error_html(
+                "No such page",
                 StatusCode::NOT_FOUND,
+                &templates,
+                session_with_store,
             ));
         }
     };
@@ -727,19 +693,20 @@ pub async fn render_handler(
     let (title, rendered_body) = match (page.title, page.rendered_body) {
         (Some(title), Some(rendered_body)) => (title, rendered_body),
         (Some(_), None) => {
-            return Ok(warp::reply::with_status(
-                warp::reply::html(error_html(
-                    "Page is still being populated (has title, missing body)",
-                    &templates,
-                )),
+            return Ok(error_html(
+                "Page is still being populated (has title, missing body)",
                 StatusCode::NOT_FOUND,
+                &templates,
+                session_with_store,
             ));
         }
         (None, Some(rendered_body)) => (tail.as_str().to_string(), rendered_body),
         (None, None) => {
-            return Ok(warp::reply::with_status(
-                warp::reply::html(error_html("Page is still being populated.", &templates)),
+            return Ok(error_html(
+                "Page is still being populated.",
                 StatusCode::NOT_FOUND,
+                &templates,
+                session_with_store,
             ));
         }
     };
@@ -754,8 +721,11 @@ pub async fn render_handler(
         }
     };
 
-    Ok(warp::reply::with_status(
-        warp::reply::html(text),
-        StatusCode::OK,
+    Ok((
+        Box::new(warp::reply::with_status(
+            warp::reply::html(text),
+            StatusCode::OK,
+        )),
+        session_with_store,
     ))
 }

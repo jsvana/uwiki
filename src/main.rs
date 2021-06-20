@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     for template in templates {
         let path = config
             .asset_template_path
-            .join(format!("{}.html", template));
+            .join(format!("{}.html.hbs", template));
         let page_template = std::fs::read_to_string(path.clone())
             .with_context(|| format!("failed to read {} template {:?}", template, path))?;
         handlebars

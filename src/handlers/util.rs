@@ -48,6 +48,13 @@ pub struct Image {
     pub alt_text: Option<String>,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct Revision {
+    pub editor: String,
+    pub version: i32,
+    pub updated_at: Option<String>,
+}
+
 pub async fn get_current_username(
     db: &Pool<Postgres>,
     session_with_store: &SessionWithStore<MemoryStore>,

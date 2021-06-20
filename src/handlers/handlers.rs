@@ -22,7 +22,7 @@ use warp_sessions::{MemoryStore, SessionWithStore};
 
 use crate::handlers::util::{
     attempt_to_set_flash, error_html, error_redirect, get_and_clear_flash, get_current_username,
-    HandlerReturn, Image, Page,
+    HandlerReturn, Image, Page, Revision,
 };
 use crate::{value_or_error_redirect, Config};
 
@@ -1445,4 +1445,63 @@ pub async fn delete_image_handler(
             session_with_store,
         )),
     }
+}
+
+pub async fn page_history_handler(
+    tail: Tail,
+    db: Pool<Postgres>,
+    templates: Handlebars<'_>,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<HandlerReturn, warp::Rejection> {
+    let slug = tail.as_str().to_string();
+
+    let revisions = match sqlx::query_as!(
+        Revision,
+        "SELECT \
+            users.username AS editor, \
+            page_revisions.version AS version, \
+            TO_CHAR(page_revisions.updated_at, 'MM/DD/YYYY HH24:MI:SS') AS updated_at \
+        FROM page_revisions \
+        LEFT JOIN users
+        ON users.id = page_revisions.editor_id
+        WHERE slug = $1 \
+        ORDER BY updated_at DESC",
+        slug,
+    )
+    .fetch_all(&db)
+    .await
+    {
+        Ok(revisions) => revisions,
+        Err(_) => {
+            return Ok(error_html(
+                "Unable to fetch page history",
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
+                session_with_store,
+            ));
+        }
+    };
+
+    let revisions = match revisions.len() {
+        0 => None,
+        _ => Some(revisions),
+    };
+
+    let text = match templates.render(
+        "page_history",
+        &json!({ "slug": slug, "revisions": revisions }),
+    ) {
+        Ok(text) => text,
+        Err(e) => {
+            format!("<html>Error rendering page history template: {}</html>", e)
+        }
+    };
+
+    Ok((
+        Box::new(warp::reply::with_status(
+            warp::reply::html(text),
+            StatusCode::OK,
+        )),
+        session_with_store,
+    ))
 }

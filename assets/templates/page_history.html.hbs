@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>{{slug}} history</title>
+
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/skeleton.css">
+  </head>
+  <body>
+    <div class="container">
+      <div class="row">
+        <h1>{{slug}} history</h1>
+
+        <a href="/w/{{slug}}">Current version</a>
+
+        {{#if revisions}}
+          <h4>Revisions</h4>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Editor</th>
+                <th>Version</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {{#each revisions}}
+                <tr>
+                  <tr>{{this.editor}}</tr>
+                  <tr>{{this.version}}</tr>
+                  <tr>{{this.updated_at}}</tr>
+                </tr>
+              {{/each}}
+            </tbody>
+          </table>
+        {{else}}
+          <p>No revisions yet.</p>
+        {{/if}}
+
+        <a href="/">Home</a>
+      </div>
+    </div>
+  </body>
+</html>

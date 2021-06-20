@@ -20,10 +20,20 @@
       </div>
 
       <div class="row">
-        <a href="/">Home</a>
-
         {{#if current_username}}
-          <a href="/e/{{slug}}">Edit</a>
+          <form action="/images/delete/{{slug}}", method="post">
+            <a href="/">Home</a>
+
+            <a href="/pages/history/{{slug}}">History</a>
+
+            <a href="/e/{{slug}}">Edit</a>
+
+            <input type="submit" value="Delete" />
+          </form>
+        {{else}}
+          <a href="/">Home</a>
+
+          <a href="/pages/history/{{slug}}">History</a>
         {{/if}}
       </div>
     </div>

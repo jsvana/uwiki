@@ -6,7 +6,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use handlebars::Handlebars;
-use log::info;
 use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
@@ -46,7 +45,7 @@ fn error_html(
     templates: &Handlebars,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> HandlerReturn {
-    let flash = session_with_store.session.get::<String>("flash");
+    let (flash, session_with_store) = get_and_clear_flash(session_with_store);
 
     let text = match templates.render("error", &json!({ "error": message , "flash": flash })) {
         Ok(text) => text,
@@ -106,7 +105,7 @@ pub async fn index_handler(
     templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
-    let flash = session_with_store.session.get::<String>("flash");
+    let (flash, session_with_store) = get_and_clear_flash(session_with_store);
 
     let current_username = get_current_username(&db, &session_with_store).await;
 
@@ -190,7 +189,7 @@ pub async fn login_handler(
     templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
-    let flash = session_with_store.session.get::<String>("flash");
+    let (flash, session_with_store) = get_and_clear_flash(session_with_store);
 
     let text = match templates.render("login", &json!({ "flash": flash })) {
         Ok(text) => text,
@@ -205,6 +204,15 @@ pub async fn login_handler(
     ))
 }
 
+fn get_and_clear_flash(
+    mut session_with_store: SessionWithStore<MemoryStore>,
+) -> (Option<String>, SessionWithStore<MemoryStore>) {
+    let value = session_with_store.session.get("flash");
+    session_with_store.session.remove("flash");
+
+    (value, session_with_store)
+}
+
 fn error_redirect(
     destination_uri: Uri,
     message: String,
@@ -214,23 +222,17 @@ fn error_redirect(
         .session
         .insert("flash", message.to_string())
     {
-        Ok(_) => {
-            info!("SET FLASH TO {}", message);
-            (
-                Box::new(warp::redirect::temporary(destination_uri)),
-                session_with_store,
-            )
-        }
-        Err(e) => {
-            info!("FAILED TO SET FLASH");
-            (
-                Box::new(warp::reply::html(format!(
-                    "<html>Internal error (failed to persist flash to session cookie): {}",
-                    e
-                ))),
-                session_with_store,
-            )
-        }
+        Ok(_) => (
+            Box::new(warp::redirect::see_other(destination_uri)),
+            session_with_store,
+        ),
+        Err(e) => (
+            Box::new(warp::reply::html(format!(
+                "<html>Internal error (failed to persist flash to session cookie): {}",
+                e
+            ))),
+            session_with_store,
+        ),
     }
 }
 
@@ -346,7 +348,7 @@ pub async fn authenticate_handler(
 
     match tx.commit().await {
         Ok(_) => Ok((
-            Box::new(warp::redirect::temporary(Uri::from_static("/"))),
+            Box::new(warp::redirect::see_other(Uri::from_static("/"))),
             session_with_store,
         )),
         Err(e) => Ok(error_redirect(
@@ -532,7 +534,7 @@ pub async fn set_page_handler(
 
     match tx.commit().await {
         Ok(_) => Ok((
-            Box::new(warp::redirect::temporary(destination_uri)),
+            Box::new(warp::redirect::see_other(destination_uri)),
             session_with_store,
         )),
         Err(e) => Ok(error_html(
@@ -681,12 +683,10 @@ pub async fn edit_page_handler(
             ));
         }
     };
-    println!("TWO");
 
     let token = match session_with_store.session.get::<String>("sid") {
         Some(token) => token,
         None => {
-            info!("asdf NO TOKEN");
             let destination_uri: warp::http::Uri = match format!("/w/{}", slug).parse() {
                 Ok(uri) => uri,
                 Err(e) => {
@@ -706,7 +706,6 @@ pub async fn edit_page_handler(
             ));
         }
     };
-    println!("THREE");
 
     let user_id = match sqlx::query!(
         "SELECT user_id FROM tokens \
@@ -719,7 +718,6 @@ pub async fn edit_page_handler(
     {
         Ok(row) => row.user_id,
         Err(_) => {
-            info!("TOKEN NOT VALID");
             let destination_uri: warp::http::Uri = match format!("/bar/{}", slug).parse() {
                 Ok(uri) => uri,
                 Err(e) => {
@@ -739,7 +737,6 @@ pub async fn edit_page_handler(
             ));
         }
     };
-    println!("FOUR");
 
     if let Err(e) = sqlx::query!(
         "INSERT INTO pages (owner_id, slug) VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -856,7 +853,7 @@ pub async fn render_handler(
         }
     };
 
-    let flash = session_with_store.session.get::<String>("flash");
+    let (flash, session_with_store) = get_and_clear_flash(session_with_store);
     let current_username = get_current_username(&db, &session_with_store).await;
 
     dbg!(&flash);

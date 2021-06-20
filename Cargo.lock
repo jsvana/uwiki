@@ -2186,8 +2186,6 @@ dependencies = [
 [[package]]
 name = "uwiki-types"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d42378da6201eaccc0096f1454074a8f61c89f63b07f3e0e082c5a2fb02363c3"
 dependencies = [
  "serde",
  "serde_derive",

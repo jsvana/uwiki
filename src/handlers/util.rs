@@ -1,4 +1,5 @@
 use handlebars::Handlebars;
+use log::debug;
 use serde_derive::Serialize;
 use serde_json::json;
 use sqlx::{Pool, Postgres};
@@ -68,6 +69,17 @@ pub async fn get_current_username(
     }
 }
 
+pub fn attempt_to_set_flash(
+    message: &str,
+    mut session_with_store: SessionWithStore<MemoryStore>,
+) -> SessionWithStore<MemoryStore> {
+    if let Err(e) = session_with_store.session.insert("flash", message) {
+        debug!("Failed to set flash: {}", e);
+    }
+
+    session_with_store
+}
+
 pub fn get_and_clear_flash(
     mut session_with_store: SessionWithStore<MemoryStore>,
 ) -> (Option<String>, SessionWithStore<MemoryStore>) {
@@ -82,22 +94,12 @@ pub fn error_redirect(
     message: String,
     mut session_with_store: SessionWithStore<MemoryStore>,
 ) -> HandlerReturn {
-    match session_with_store
-        .session
-        .insert("flash", message.to_string())
-    {
-        Ok(_) => (
-            Box::new(warp::redirect::see_other(destination_uri)),
-            session_with_store,
-        ),
-        Err(e) => (
-            Box::new(warp::reply::html(format!(
-                "<html>Internal error (failed to persist flash to session cookie): {}",
-                e
-            ))),
-            session_with_store,
-        ),
-    }
+    session_with_store = attempt_to_set_flash(&message, session_with_store);
+
+    (
+        Box::new(warp::redirect::see_other(destination_uri)),
+        session_with_store,
+    )
 }
 
 #[macro_export]

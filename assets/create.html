@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>New page</title>
+
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/skeleton.css">
+  </head>
+  <body>
+    <div class="container">
+      <div class="row">
+        {{#if flash}}
+          <p>{{flash}}</p>
+        {{/if}}
+      </div>
+
+      <div class="row">
+        <form action="/c" method="post">
+          <div class="row">
+            <label for="title">Title:</label>
+            <input name="title" value="{{title}}" />
+          </div>
+
+          <div class="row">
+            <label for="body">Body:</label>
+            <textarea name="body">{{body}}</textarea>
+          </div>
+
+          <div class="row">
+            <input type="submit" value="Create" class="button-primary" />
+          </div>
+        </form>
+      </div>
+    </div>
+  </body>
+</html>

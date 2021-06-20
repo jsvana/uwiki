@@ -16,7 +16,8 @@ use warp::Filter;
 use warp_sessions::{MemoryStore, SessionWithStore};
 
 use crate::handlers::util::{
-    error_html, error_redirect, get_and_clear_flash, get_current_username, HandlerReturn, Page,
+    attempt_to_set_flash, error_html, error_redirect, get_and_clear_flash, get_current_username,
+    HandlerReturn, Page,
 };
 use crate::{value_or_error_redirect, Config};
 
@@ -146,7 +147,6 @@ pub async fn authenticate_handler(
     request: uwiki_types::AuthenticateRequest,
     db: Pool<Postgres>,
     config: Config,
-    templates: Handlebars<'_>,
     mut session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<HandlerReturn, warp::Rejection> {
     let mut tx = value_or_error_redirect!(
@@ -225,17 +225,7 @@ pub async fn authenticate_handler(
         ));
     }
 
-    if let Err(e) = session_with_store
-        .session
-        .insert("flash", "Logged in successfully")
-    {
-        return Ok(error_html(
-            &format!("Error setting flash cookie: {}", e),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &templates,
-            session_with_store,
-        ));
-    }
+    session_with_store = attempt_to_set_flash("Logged in successfully", session_with_store);
 
     match tx.commit().await {
         Ok(_) => Ok((
@@ -262,7 +252,7 @@ pub async fn set_page_handler(
     let token = match session_with_store.session.get::<String>("sid") {
         Some(token) => token,
         None => {
-            let destination_uri: warp::http::Uri = match format!("/asdf/{}", slug).parse() {
+            let destination_uri: warp::http::Uri = match format!("/w/{}", slug).parse() {
                 Ok(uri) => uri,
                 Err(e) => {
                     return Ok(error_html(
@@ -758,4 +748,168 @@ pub async fn render_handler(
         )),
         session_with_store,
     ))
+}
+
+pub async fn create_page_handler(
+    templates: Handlebars<'_>,
+    db: Pool<Postgres>,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
+    let (flash, mut session_with_store) = get_and_clear_flash(session_with_store);
+
+    let current_username = get_current_username(&db, &session_with_store).await;
+
+    session_with_store =
+        attempt_to_set_flash("Must be logged in to create a page", session_with_store);
+
+    if let None = current_username {
+        return Ok((
+            Box::new(warp::redirect::see_other(Uri::from_static("/login"))),
+            session_with_store,
+        ));
+    }
+
+    let text = match templates.render("create", &json!({ "flash": flash })) {
+        Ok(text) => text,
+        Err(e) => {
+            format!("<html>Error loading index: {}</html>", e)
+        }
+    };
+
+    Ok((
+        Box::new(warp::reply::with_status(
+            warp::reply::html(text),
+            StatusCode::OK,
+        )),
+        session_with_store,
+    ))
+}
+
+pub async fn persist_new_page_handler(
+    request: uwiki_types::CreatePageRequest,
+    db: Pool<Postgres>,
+    templates: Handlebars<'_>,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<HandlerReturn, warp::Rejection> {
+    let token = match session_with_store.session.get::<String>("sid") {
+        Some(token) => token,
+        None => {
+            return Ok(error_redirect(
+                Uri::from_static("/login"),
+                "Not logged in".to_string(),
+                session_with_store,
+            ));
+        }
+    };
+
+    let mut tx = match db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            // TODO(jsvana): should these be redirects w/ flashes instead?
+            return Ok(error_html(
+                &format!("Error setting content: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
+                session_with_store,
+            ));
+        }
+    };
+
+    let user_id = match sqlx::query!(
+        "SELECT user_id FROM tokens \
+        WHERE token = $1 \
+        AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+        token,
+    )
+    .fetch_one(&mut tx)
+    .await
+    {
+        Ok(row) => row.user_id,
+        Err(_) => {
+            return Ok(error_redirect(
+                Uri::from_static("/login"),
+                "Not logged in".to_string(),
+                session_with_store,
+            ));
+        }
+    };
+
+    let rendered_body = {
+        let mut doc = pandoc::new();
+        doc.set_input_format(InputFormat::MarkdownGithub, Vec::new());
+        doc.set_output_format(OutputFormat::Html, Vec::new());
+        doc.set_input(InputKind::Pipe(request.body.clone()));
+        doc.set_output(OutputKind::Pipe);
+        let output = match doc.execute() {
+            Ok(output) => output,
+            Err(e) => {
+                return Ok(error_html(
+                    &format!("Error rendering page (failed to run Pandoc: {})", e),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &templates,
+                    session_with_store,
+                ));
+            }
+        };
+
+        match output {
+            PandocOutput::ToBuffer(buffer) => buffer,
+            _ => {
+                return Ok(error_html(
+                    "Malformed Pandoc response",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &templates,
+                    session_with_store,
+                ));
+            }
+        }
+    };
+
+    if let Err(e) = sqlx::query!(
+        r#"
+        INSERT INTO pages
+        (owner_id, slug, title, body, rendered_body, updated_at)
+        VALUES
+        ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)"#,
+        user_id,
+        request.slug,
+        request.title,
+        request.body,
+        rendered_body,
+    )
+    .execute(&mut tx)
+    .await
+    {
+        return Ok(error_html(
+            &format!("Error adding page: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
+            session_with_store,
+        ));
+    }
+
+    let destination_uri: warp::http::Uri = match format!("/w/{}", request.slug).parse() {
+        Ok(uri) => uri,
+        Err(e) => {
+            return Ok(error_html(
+                &format!("Error parsing slug: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
+                session_with_store,
+            ));
+        }
+    };
+
+    match tx.commit().await {
+        Ok(_) => Ok((
+            Box::new(warp::redirect::see_other(destination_uri)),
+            session_with_store,
+        )),
+        Err(e) => Ok(error_html(
+            &format!("Error creating page: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
+            session_with_store,
+        )),
+    }
 }

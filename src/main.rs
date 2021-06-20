@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
         .await
         .context("failed to create Postgres connection pool")?;
 
-    let templates = vec!["index", "login", "wiki", "edit", "error"];
+    let templates = vec!["index", "login", "wiki", "edit", "error", "create"];
     let mut handlebars = Handlebars::new();
 
     for template in templates {
@@ -112,7 +112,6 @@ async fn main() -> Result<()> {
         .and(warp::body::form())
         .and(handlers::with_db(pool.clone()))
         .and(handlers::with_config(config.clone()))
-        .and(handlers::with_templates(handlebars.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
             None,
@@ -163,10 +162,35 @@ async fn main() -> Result<()> {
         .and(warp::path("s"))
         .and(warp::path::tail())
         .and(warp::body::form())
-        .and(handlers::with_db(pool))
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::set_page_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session);
+
+    let create_page = warp::get()
+        .and(warp::path("create"))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(handlers::with_db(pool.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::create_page_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session);
+
+    let persist_new_page = warp::post()
+        .and(warp::path("c"))
+        .and(warp::body::form())
+        .and(handlers::with_db(pool.clone()))
         .and(handlers::with_templates(handlebars.clone()))
         .and(warp_sessions::request::with_session(session_store, None))
-        .and_then(handlers::set_page_handler)
+        .and_then(handlers::persist_new_page_handler)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session);
 
@@ -180,7 +204,9 @@ async fn main() -> Result<()> {
             .or(render_wiki)
             .or(get_page)
             .or(edit_page)
-            .or(set_page),
+            .or(set_page)
+            .or(create_page)
+            .or(persist_new_page),
     )
     .run(config.bind_address)
     .await;

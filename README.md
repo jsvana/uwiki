@@ -26,6 +26,7 @@ Configuration is done through environment variables.
 
 ## Required HTML template pages
 
+* `index.html`: Main page
 * `login.html`: Login page
 * `wiki.html`: Single wiki page
 * `error.html`: Page shown when the server hits an error

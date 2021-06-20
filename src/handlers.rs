@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use handlebars::Handlebars;
-use maplit::btreemap;
+use log::info;
 use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOutput};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
@@ -46,7 +46,9 @@ fn error_html(
     templates: &Handlebars,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> HandlerReturn {
-    let text = match templates.render("error", &btreemap! { "error" => message }) {
+    let flash = session_with_store.session.get::<String>("flash");
+
+    let text = match templates.render("error", &json!({ "error": message , "flash": flash })) {
         Ok(text) => text,
         Err(e) => {
             format!(
@@ -71,12 +73,42 @@ struct Page {
     title: Option<String>,
 }
 
+async fn get_current_username(
+    db: &Pool<Postgres>,
+    session_with_store: &SessionWithStore<MemoryStore>,
+) -> Option<String> {
+    let token = match session_with_store.session.get::<String>("sid") {
+        Some(token) => token,
+        None => {
+            return None;
+        }
+    };
+
+    match sqlx::query!(
+        "SELECT users.username AS username \
+        FROM tokens \
+        LEFT JOIN users \
+        ON users.id = tokens.user_id \
+        WHERE token = $1 \
+        AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+        token,
+    )
+    .fetch_one(db)
+    .await
+    {
+        Ok(row) => Some(row.username),
+        Err(_) => None,
+    }
+}
+
 pub async fn index_handler(
     db: Pool<Postgres>,
     templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
     let flash = session_with_store.session.get::<String>("flash");
+
+    let current_username = get_current_username(&db, &session_with_store).await;
 
     let pages = match sqlx::query_as::<_, Page>(
         "SELECT slug, title FROM pages \
@@ -97,7 +129,15 @@ pub async fn index_handler(
         }
     };
 
-    let text = match templates.render("index", &json!({ "flash": flash, "pages": Some(pages) })) {
+    let pages = match pages.len() {
+        0 => None,
+        _ => Some(pages),
+    };
+
+    let text = match templates.render(
+        "index",
+        &json!({ "flash": flash, "pages": pages, "current_username": current_username}),
+    ) {
         Ok(text) => text,
         Err(e) => {
             format!("<html>Error loading index: {}</html>", e)
@@ -152,7 +192,7 @@ pub async fn login_handler(
 ) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
     let flash = session_with_store.session.get::<String>("flash");
 
-    let text = match templates.render("login", &btreemap! { "flash" => flash }) {
+    let text = match templates.render("login", &json!({ "flash": flash })) {
         Ok(text) => text,
         Err(e) => {
             format!("<html>Error: {}</html>", e)
@@ -174,17 +214,23 @@ fn error_redirect(
         .session
         .insert("flash", message.to_string())
     {
-        Ok(_) => (
-            Box::new(warp::redirect(destination_uri)),
-            session_with_store,
-        ),
-        Err(e) => (
-            Box::new(warp::reply::html(format!(
-                "<html>Internal error (failed to persist flash to session cookie): {}",
-                e
-            ))),
-            session_with_store,
-        ),
+        Ok(_) => {
+            info!("SET FLASH TO {}", message);
+            (
+                Box::new(warp::redirect::temporary(destination_uri)),
+                session_with_store,
+            )
+        }
+        Err(e) => {
+            info!("FAILED TO SET FLASH");
+            (
+                Box::new(warp::reply::html(format!(
+                    "<html>Internal error (failed to persist flash to session cookie): {}",
+                    e
+                ))),
+                session_with_store,
+            )
+        }
     }
 }
 
@@ -207,9 +253,9 @@ pub async fn authenticate_handler(
     request: uwiki_types::AuthenticateRequest,
     db: Pool<Postgres>,
     config: Config,
+    templates: Handlebars<'_>,
     mut session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<HandlerReturn, warp::Rejection> {
-    // TODO(jsvana): take template and redirect to login page with flash
     let mut tx = value_or_error_redirect!(
         db.begin().await,
         Uri::from_static("/login"),
@@ -286,11 +332,21 @@ pub async fn authenticate_handler(
         ));
     }
 
+    if let Err(e) = session_with_store
+        .session
+        .insert("flash", "Logged in successfully")
+    {
+        return Ok(error_html(
+            &format!("Error setting flash cookie: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
+            session_with_store,
+        ));
+    }
+
     match tx.commit().await {
         Ok(_) => Ok((
-            Box::new(warp::reply::html(
-                "<html>Logged in successfully!</html>".to_string(),
-            )),
+            Box::new(warp::redirect::temporary(Uri::from_static("/"))),
             session_with_store,
         )),
         Err(e) => Ok(error_redirect(
@@ -313,10 +369,21 @@ pub async fn set_page_handler(
     let token = match session_with_store.session.get::<String>("sid") {
         Some(token) => token,
         None => {
-            return Ok(error_html(
-                "Not logged in (can't claim a page without logging in)",
-                StatusCode::FORBIDDEN,
-                &templates,
+            let destination_uri: warp::http::Uri = match format!("/asdf/{}", slug).parse() {
+                Ok(uri) => uri,
+                Err(e) => {
+                    return Ok(error_html(
+                        &format!("Error parsing slug: {}", e),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &templates,
+                        session_with_store,
+                    ));
+                }
+            };
+
+            return Ok(error_redirect(
+                destination_uri,
+                "Not logged in".to_string(),
                 session_with_store,
             ));
         }
@@ -465,7 +532,7 @@ pub async fn set_page_handler(
 
     match tx.commit().await {
         Ok(_) => Ok((
-            Box::new(warp::redirect(destination_uri)),
+            Box::new(warp::redirect::temporary(destination_uri)),
             session_with_store,
         )),
         Err(e) => Ok(error_html(
@@ -594,6 +661,15 @@ pub async fn edit_page_handler(
 ) -> Result<HandlerReturn, warp::Rejection> {
     let slug = tail.as_str().to_string();
 
+    /*
+    return Ok(error_html(
+        "lol",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store,
+    ));
+    */
+
     let mut tx = match db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
@@ -605,18 +681,32 @@ pub async fn edit_page_handler(
             ));
         }
     };
+    println!("TWO");
 
     let token = match session_with_store.session.get::<String>("sid") {
         Some(token) => token,
         None => {
-            return Ok(error_html(
-                "Not logged in (can't claim a page without logging in)",
-                StatusCode::FORBIDDEN,
-                &templates,
+            info!("asdf NO TOKEN");
+            let destination_uri: warp::http::Uri = match format!("/w/{}", slug).parse() {
+                Ok(uri) => uri,
+                Err(e) => {
+                    return Ok(error_html(
+                        &format!("Error parsing slug: {}", e),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &templates,
+                        session_with_store,
+                    ));
+                }
+            };
+
+            return Ok(error_redirect(
+                destination_uri,
+                "Not logged in".to_string(),
                 session_with_store,
             ));
         }
     };
+    println!("THREE");
 
     let user_id = match sqlx::query!(
         "SELECT user_id FROM tokens \
@@ -629,14 +719,27 @@ pub async fn edit_page_handler(
     {
         Ok(row) => row.user_id,
         Err(_) => {
-            return Ok(error_html(
-                "Not logged in (can't claim a page without logging in)",
-                StatusCode::FORBIDDEN,
-                &templates,
+            info!("TOKEN NOT VALID");
+            let destination_uri: warp::http::Uri = match format!("/bar/{}", slug).parse() {
+                Ok(uri) => uri,
+                Err(e) => {
+                    return Ok(error_html(
+                        &format!("Error parsing slug: {}", e),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &templates,
+                        session_with_store,
+                    ));
+                }
+            };
+
+            return Ok(error_redirect(
+                destination_uri,
+                "Not logged in".to_string(),
                 session_with_store,
             ));
         }
     };
+    println!("FOUR");
 
     if let Err(e) = sqlx::query!(
         "INSERT INTO pages (owner_id, slug) VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -683,12 +786,12 @@ pub async fn edit_page_handler(
 
     let text = match templates.render(
         "edit",
-        &btreemap! {
-            "slug" => slug,
-            "title" => page.title.unwrap_or_else(|| "".to_string()),
-            "body" => page.body.unwrap_or_else(|| "".to_string()),
-            "version" => page.current_version.to_string(),
-        },
+        &json!({
+            "slug": slug,
+            "title": page.title.unwrap_or_else(|| "".to_string()),
+            "body": page.body.unwrap_or_else(|| "".to_string()),
+            "version": page.current_version.to_string(),
+        }),
     ) {
         Ok(text) => text,
         Err(e) => {
@@ -711,15 +814,18 @@ pub async fn render_handler(
     templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<HandlerReturn, Infallible> {
+    let slug = tail.as_str().to_string();
+
     let page = match sqlx::query!(
         "SELECT title, rendered_body FROM pages WHERE slug = $1",
-        tail.as_str()
+        slug
     )
     .fetch_one(&db)
     .await
     {
         Ok(page) => page,
         Err(_) => {
+            // TODO(jsvana): add "missing" template with "create" button
             return Ok(error_html(
                 "No such page",
                 StatusCode::NOT_FOUND,
@@ -750,9 +856,15 @@ pub async fn render_handler(
         }
     };
 
+    let flash = session_with_store.session.get::<String>("flash");
+    let current_username = get_current_username(&db, &session_with_store).await;
+
+    dbg!(&flash);
+    dbg!(&current_username);
+
     let text = match templates.render(
         "wiki",
-        &btreemap! { "title" => title, "body" => rendered_body },
+        &json!({ "title": title, "body": rendered_body, "slug": slug, "current_username": current_username, "flash": flash }),
     ) {
         Ok(text) => text,
         Err(e) => {

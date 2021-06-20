@@ -3,22 +3,37 @@
   <head>
     <meta charset="utf-8">
     <title>uwiki home</title>
+
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/skeleton.css">
   </head>
   <body>
-    <h1>uwiki home</h1>
+    <div class="container">
+      <div class="row">
+        <h1>uwiki home</h1>
 
-    {{#if flash}}
-      <p>{{flash}}</p>
-    {{/if}}
+        {{#if current_username}}
+          <p>Logged in as {{current_username}}</p>
+        {{else}}
+          <a href="/login">Login</a>
+        {{/if}}
 
-    {{#if pages}}
-      <h2>Most recently updated pages</h2>
+        {{#if flash}}
+          <p>{{flash}}</p>
+        {{/if}}
 
-      {{#each pages}}
-        <a href="/w/{{this.slug}}">{{this.title}}</a>
-      {{/each}}
-    {{else}}
-      <p>No pages yet.</p>
-    {{/if}}
+        {{#if pages}}
+          <h4>Most recently updated pages</h2>
+
+          {{#each pages}}
+            <div>
+              <a href="/w/{{this.slug}}">{{this.title}}</a>
+            </div>
+          {{/each}}
+        {{else}}
+          <p>No pages yet.</p>
+        {{/if}}
+      </div>
+    </div>
   </body>
 </html>

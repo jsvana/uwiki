@@ -3,18 +3,39 @@
   <head>
     <meta charset="utf-8">
     <title>uwiki login</title>
+
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/skeleton.css">
   </head>
   <body>
-    {{#if flash}}
-      <p>{{flash}}</p>
-    {{/if}}
+    <div class="container">
+      <div class="row">
+        <h4>Login</h4>
 
-    <form action="/a" method="post">
-      <label for="username">Username:</label>
-      <input type="text" name="username" />
-      <label for="password">Password:</label>
-      <input type="password" name="password" />
-      <input type="submit" value="Login" />
-    </form>
+        <div class="row">
+          <a href="/">Home</a>
+        </div>
+
+        {{#if flash}}
+          <p>{{flash}}</p>
+        {{/if}}
+
+        <form action="/a" method="post">
+          <div class="row">
+            <label for="username">Username:</label>
+            <input type="text" name="username" />
+          </div>
+
+          <div class="row">
+            <label for="password">Password:</label>
+            <input type="password" name="password" />
+          </div>
+
+          <div class="row">
+            <input type="submit" value="Login" class="button-primary" />
+          </div>
+        </form>
+      </div>
+    </div>
   </body>
 </html>

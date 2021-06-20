@@ -66,6 +66,8 @@ async fn main() -> Result<()> {
 
     let session_store = MemoryStore::new();
 
+    let css = warp::path("css").and(warp::fs::dir("assets/css"));
+
     let index = warp::get()
         .and(warp::path::end())
         .and(handlers::with_db(pool.clone()))
@@ -110,6 +112,7 @@ async fn main() -> Result<()> {
         .and(warp::body::form())
         .and(handlers::with_db(pool.clone()))
         .and(handlers::with_config(config.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
             None,
@@ -170,7 +173,7 @@ async fn main() -> Result<()> {
     info!("Starting server at {}", config.bind_address);
 
     warp::serve(
-        index
+        css.or(index)
             .or(login)
             .or(add_user)
             .or(authenticate)

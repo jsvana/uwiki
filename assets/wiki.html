@@ -3,8 +3,29 @@
   <head>
     <meta charset="utf-8">
     <title>{{title}}</title>
+
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/skeleton.css">
   </head>
   <body>
-{{{body}}}
+    <div class="container">
+      {{#if flash}}
+        <div class="row">
+          <p>{{flash}}</p>
+        </div>
+      {{/if}}
+
+      <div class="row">
+        {{{body}}}
+      </div>
+
+      <div class="row">
+        <a href="/">Home</a>
+
+        {{#if current_username}}
+          <a href="/e/{{slug}}">Edit</a>
+        {{/if}}
+      </div>
+    </div>
   </body>
 </html>

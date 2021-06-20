@@ -3,9 +3,21 @@
   <head>
     <meta charset="utf-8">
     <title>Error</title>
+
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/skeleton.css">
   </head>
   <body>
-    <h1>Error</h1>
-    <p>{{error}}</p>
+    <div class="container">
+      <div class="row">
+        <h4>Error</h4>
+
+        {{#if flash}}
+          <p>{{flash}}</p>
+        {{/if}}
+
+        <p>{{error}}</p>
+      </div>
+    </div>
   </body>
 </html>

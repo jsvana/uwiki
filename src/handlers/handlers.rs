@@ -311,7 +311,7 @@ pub async fn set_page_handler(
     };
 
     let page = match sqlx::query!(
-        "SELECT owner_id, current_version FROM pages WHERE slug = $1",
+        "SELECT owner_id, current_version, body FROM pages WHERE slug = $1",
         slug,
     )
     .fetch_one(&mut tx)
@@ -378,6 +378,28 @@ pub async fn set_page_handler(
             }
         }
     };
+
+    if let Err(e) = sqlx::query!(
+        r#"
+        INSERT INTO page_revisions
+        (slug, editor_id, version, body)
+        VALUES
+        ($1, $2, $3, $4)"#,
+        slug,
+        user_id,
+        page.current_version,
+        page.body,
+    )
+    .execute(&mut tx)
+    .await
+    {
+        return Ok(error_html(
+            &format!("Error updating page: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
+            session_with_store,
+        ));
+    }
 
     if let Err(e) = sqlx::query!(
         r#"

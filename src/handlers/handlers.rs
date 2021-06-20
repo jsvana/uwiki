@@ -226,6 +226,9 @@ pub async fn authenticate_handler(
     }
 
     session_with_store = attempt_to_set_flash("Logged in successfully", session_with_store);
+    dbg!(&session_with_store.session.id());
+    let other = session_with_store.clone();
+    dbg!(&other.session.id());
 
     match tx.commit().await {
         Ok(_) => Ok((
@@ -556,9 +559,12 @@ pub async fn edit_page_handler(
         }
     };
 
+    dbg!(&session_with_store.session.id());
+
     let token = match session_with_store.session.get::<String>("sid") {
         Some(token) => token,
         None => {
+            println!("REDIRECTING DUE TO MISSING sid");
             let destination_uri: warp::http::Uri = match format!("/w/{}", slug).parse() {
                 Ok(uri) => uri,
                 Err(e) => {
@@ -590,7 +596,8 @@ pub async fn edit_page_handler(
     {
         Ok(row) => row.user_id,
         Err(_) => {
-            let destination_uri: warp::http::Uri = match format!("/bar/{}", slug).parse() {
+            println!("REDIRECTING DUE TO INVALID sid");
+            let destination_uri: warp::http::Uri = match format!("/w/{}", slug).parse() {
                 Ok(uri) => uri,
                 Err(e) => {
                     return Ok(error_html(

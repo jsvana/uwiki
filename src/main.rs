@@ -101,7 +101,16 @@ async fn main() -> Result<()> {
         .and(handlers::with_templates(handlebars.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
-            None,
+            Some(CookieOptions {
+                cookie_name: "sid",
+                cookie_value: None,
+                max_age: None,
+                domain: None,
+                path: None,
+                secure: false,
+                http_only: true,
+                same_site: Some(SameSiteCookieOption::Strict),
+            }),
         ))
         .and_then(handlers::login_handler)
         .untuple_one()
@@ -114,7 +123,16 @@ async fn main() -> Result<()> {
         .and(handlers::with_config(config.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
-            None,
+            Some(CookieOptions {
+                cookie_name: "sid",
+                cookie_value: None,
+                max_age: None,
+                domain: None,
+                path: None,
+                secure: false,
+                http_only: true,
+                same_site: Some(SameSiteCookieOption::Strict),
+            }),
         ))
         .and_then(handlers::authenticate_handler)
         .untuple_one()
@@ -127,7 +145,16 @@ async fn main() -> Result<()> {
         .and(handlers::with_templates(handlebars.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
-            None,
+            Some(CookieOptions {
+                cookie_name: "sid",
+                cookie_value: None,
+                max_age: None,
+                domain: None,
+                path: None,
+                secure: false,
+                http_only: true,
+                same_site: Some(SameSiteCookieOption::Strict),
+            }),
         ))
         .and_then(handlers::render_handler)
         .untuple_one()
@@ -139,7 +166,16 @@ async fn main() -> Result<()> {
         .and(handlers::with_db(pool.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
-            None,
+            Some(CookieOptions {
+                cookie_name: "sid",
+                cookie_value: None,
+                max_age: None,
+                domain: None,
+                path: None,
+                secure: false,
+                http_only: true,
+                same_site: Some(SameSiteCookieOption::Strict),
+            }),
         ))
         .and_then(handlers::get_page_handler)
         .untuple_one()
@@ -152,7 +188,16 @@ async fn main() -> Result<()> {
         .and(handlers::with_templates(handlebars.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
-            None,
+            Some(CookieOptions {
+                cookie_name: "sid",
+                cookie_value: None,
+                max_age: None,
+                domain: None,
+                path: None,
+                secure: false,
+                http_only: true,
+                same_site: Some(SameSiteCookieOption::Strict),
+            }),
         ))
         .and_then(handlers::edit_page_handler)
         .untuple_one()
@@ -166,7 +211,16 @@ async fn main() -> Result<()> {
         .and(handlers::with_templates(handlebars.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
-            None,
+            Some(CookieOptions {
+                cookie_name: "sid",
+                cookie_value: None,
+                max_age: None,
+                domain: None,
+                path: None,
+                secure: false,
+                http_only: true,
+                same_site: Some(SameSiteCookieOption::Strict),
+            }),
         ))
         .and_then(handlers::set_page_handler)
         .untuple_one()
@@ -178,7 +232,16 @@ async fn main() -> Result<()> {
         .and(handlers::with_db(pool.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
-            None,
+            Some(CookieOptions {
+                cookie_name: "sid",
+                cookie_value: None,
+                max_age: None,
+                domain: None,
+                path: None,
+                secure: false,
+                http_only: true,
+                same_site: Some(SameSiteCookieOption::Strict),
+            }),
         ))
         .and_then(handlers::create_page_handler)
         .untuple_one()
@@ -189,7 +252,19 @@ async fn main() -> Result<()> {
         .and(warp::body::form())
         .and(handlers::with_db(pool.clone()))
         .and(handlers::with_templates(handlebars.clone()))
-        .and(warp_sessions::request::with_session(session_store, None))
+        .and(warp_sessions::request::with_session(
+            session_store,
+            Some(CookieOptions {
+                cookie_name: "sid",
+                cookie_value: None,
+                max_age: None,
+                domain: None,
+                path: None,
+                secure: false,
+                http_only: true,
+                same_site: Some(SameSiteCookieOption::Strict),
+            }),
+        ))
         .and_then(handlers::persist_new_page_handler)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session);

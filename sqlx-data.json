@@ -1,15 +1,15 @@
 {
   "db": "PostgreSQL",
-  "032c9a9be764970aa6a9b3dd746c3050a22c91421aa3ee0b626f4d7911b8e04b": {
-    "query": "UPDATE pages SET title = $1, body = $2, rendered_body = $3, current_version = $4 WHERE slug = $5",
+  "25d0ae3ed083a39e1b35fe36fe63fb63067fc5ea71e43875ad23d74e1c596695": {
+    "query": "\n        INSERT INTO pages\n        (owner_id, slug, title, body, rendered_body, updated_at)\n        VALUES\n        ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)",
     "describe": {
       "columns": [],
       "parameters": {
         "Left": [
+          "Int4",
+          "Varchar",
           "Varchar",
           "Text",
-          "Text",
-          "Int4",
           "Text"
         ]
       },
@@ -86,6 +86,22 @@
         true,
         false
       ]
+    }
+  },
+  "b020e059e3281606c6f91fa13800159420d0b969d32bea16d7f622359c0e2c06": {
+    "query": "\n        UPDATE pages\n        SET\n            title = $1,\n            body = $2,\n            rendered_body = $3,\n            current_version = $4,\n            updated_at = CURRENT_TIMESTAMP\n        WHERE\n            slug = $5",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Text",
+          "Text",
+          "Int4",
+          "Text"
+        ]
+      },
+      "nullable": []
     }
   },
   "b308fbd746ba6e6018cdb9992397f0fdc2aa7fc3e0b2831b868970b5f21b9062": {
@@ -184,6 +200,26 @@
         ]
       },
       "nullable": []
+    }
+  },
+  "f384fb04da8d0047bc45028d71c75ab6b25ffb3040cf774aee13b8e4371cdf39": {
+    "query": "SELECT users.username AS username FROM tokens LEFT JOIN users ON users.id = tokens.user_id WHERE token = $1 AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "username",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Bpchar"
+        ]
+      },
+      "nullable": [
+        false
+      ]
     }
   }
 }

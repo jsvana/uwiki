@@ -1,0 +1,6 @@
+CREATE TABLE images (
+  slug VARCHAR(256) NOT NULL PRIMARY KEY,
+  owner_id INT NOT NULL,
+  filename VARCHAR(1024) NOT NULL,
+  alt VARCHAR(512)
+);

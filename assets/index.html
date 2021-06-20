@@ -34,9 +34,12 @@
           <p>No pages yet.</p>
         {{/if}}
 
-        <div class="row">
-          <a href="/create">Create new page</a>
-        </div>
+        {{#if current_username}}
+          <div class="row">
+            <a href="/create">Create new page</a>
+            <a href="/images/create">Upload new image</a>
+          </div>
+        {{/if}}
       </div>
     </div>
   </body>

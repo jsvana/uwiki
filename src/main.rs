@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use handlebars::Handlebars;
 use log::info;
 use sqlx::postgres::PgPoolOptions;
+use warp::http::{HeaderMap, HeaderValue};
 use warp::Filter;
 use warp_sessions::MemoryStore;
 
@@ -50,7 +51,15 @@ async fn main() -> Result<()> {
         .await
         .context("failed to create Postgres connection pool")?;
 
-    let templates = vec!["index", "login", "wiki", "edit", "error", "create"];
+    let templates = vec![
+        "index",
+        "login",
+        "wiki",
+        "edit",
+        "error",
+        "create",
+        "upload_image",
+    ];
     let mut handlebars = Handlebars::new();
 
     for template in templates {
@@ -67,6 +76,10 @@ async fn main() -> Result<()> {
     let session_store = MemoryStore::new();
 
     let css = warp::path("css").and(warp::fs::dir("assets/css"));
+    let images = warp::path("img").and(warp::fs::dir("assets/img"));
+
+    let mut headers = HeaderMap::new();
+    headers.insert("cache_control", HeaderValue::from_static("no-cache"));
 
     let index = warp::get()
         .and(warp::path::end())
@@ -78,7 +91,8 @@ async fn main() -> Result<()> {
         ))
         .and_then(handlers::index_handler)
         .untuple_one()
-        .and_then(warp_sessions::reply::with_session);
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
 
     let add_user = warp::post()
         .and(warp::path("u"))
@@ -96,7 +110,8 @@ async fn main() -> Result<()> {
         ))
         .and_then(handlers::login_handler)
         .untuple_one()
-        .and_then(warp_sessions::reply::with_session);
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
 
     let authenticate = warp::post()
         .and(warp::path("a"))
@@ -109,7 +124,8 @@ async fn main() -> Result<()> {
         ))
         .and_then(handlers::authenticate_handler)
         .untuple_one()
-        .and_then(warp_sessions::reply::with_session);
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
 
     let render_wiki = warp::get()
         .and(warp::path("w"))
@@ -122,7 +138,8 @@ async fn main() -> Result<()> {
         ))
         .and_then(handlers::render_handler)
         .untuple_one()
-        .and_then(warp_sessions::reply::with_session);
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
 
     let get_page = warp::post()
         .and(warp::path("g"))
@@ -134,7 +151,8 @@ async fn main() -> Result<()> {
         ))
         .and_then(handlers::get_page_handler)
         .untuple_one()
-        .and_then(warp_sessions::reply::with_session);
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
 
     let edit_page = warp::get()
         .and(warp::path("e"))
@@ -147,7 +165,8 @@ async fn main() -> Result<()> {
         ))
         .and_then(handlers::edit_page_handler)
         .untuple_one()
-        .and_then(warp_sessions::reply::with_session);
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
 
     let set_page = warp::post()
         .and(warp::path("s"))
@@ -161,7 +180,8 @@ async fn main() -> Result<()> {
         ))
         .and_then(handlers::set_page_handler)
         .untuple_one()
-        .and_then(warp_sessions::reply::with_session);
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
 
     let create_page = warp::get()
         .and(warp::path("create"))
@@ -173,22 +193,56 @@ async fn main() -> Result<()> {
         ))
         .and_then(handlers::create_page_handler)
         .untuple_one()
-        .and_then(warp_sessions::reply::with_session);
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
 
     let persist_new_page = warp::post()
         .and(warp::path("c"))
         .and(warp::body::form())
         .and(handlers::with_db(pool.clone()))
         .and(handlers::with_templates(handlebars.clone()))
-        .and(warp_sessions::request::with_session(session_store, None))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
         .and_then(handlers::persist_new_page_handler)
         .untuple_one()
-        .and_then(warp_sessions::reply::with_session);
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let upload_image = warp::get()
+        .and(warp::path("images"))
+        .and(warp::path("create"))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(handlers::with_db(pool.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::upload_image_page_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let persist_new_image = warp::post()
+        .and(warp::path("ui"))
+        .and(warp::filters::multipart::form())
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::persist_new_image_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
 
     info!("Starting server at {}", config.bind_address);
 
     warp::serve(
-        css.or(index)
+        css.or(images)
+            .or(index)
             .or(login)
             .or(add_user)
             .or(authenticate)
@@ -197,7 +251,9 @@ async fn main() -> Result<()> {
             .or(edit_page)
             .or(set_page)
             .or(create_page)
-            .or(persist_new_page),
+            .or(persist_new_page)
+            .or(upload_image)
+            .or(persist_new_image),
     )
     .run(config.bind_address)
     .await;

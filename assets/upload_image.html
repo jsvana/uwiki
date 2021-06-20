@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Upload image</title>
+
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/skeleton.css">
+  </head>
+  <body>
+    <div class="container">
+      <div class="row">
+        <form action="/ui" method="post" enctype="multipart/form-data">
+          <div class="row">
+            <label for="slug">Slug (will be prepended with "img/"):</label>
+            <input name="slug" />
+          </div>
+
+          <div class="row">
+            <label for="alt_text">Alt text:</label>
+            <input name="alt_text" />
+          </div>
+
+          <div class="row">
+            <label for="file">File:</label>
+            <input name="file" type="file" />
+          </div>
+
+          <div class="row">
+            <input type="submit" value="Upload" class="button-primary" />
+
+            <a href="/">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </body>
+</html>

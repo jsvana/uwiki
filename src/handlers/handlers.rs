@@ -456,7 +456,7 @@ pub async fn set_page_handler(
     };
 
     let page = match sqlx::query!(
-        "SELECT owner_id, current_version, body FROM pages WHERE slug = $1",
+        "SELECT current_version, body FROM pages WHERE slug = $1",
         slug,
     )
     .fetch_one(&mut tx)
@@ -472,15 +472,6 @@ pub async fn set_page_handler(
             ));
         }
     };
-
-    if page.owner_id != user_id {
-        return Ok(error_html(
-            "Refusing to modify a page you do not own",
-            StatusCode::FORBIDDEN,
-            &templates,
-            session_with_store,
-        ));
-    }
 
     if page.current_version != request.previous_version {
         return Ok(error_html(

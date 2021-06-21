@@ -1,5 +1,5 @@
 CREATE TABLE page_revisions (
-  slug VARCHAR(256) NOT NULL PRIMARY KEY,
+  slug VARCHAR(256) NOT NULL,
   editor_id INT NOT NULL,
   version INT NOT NULL DEFAULT 0,
   body TEXT,

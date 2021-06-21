@@ -1080,12 +1080,7 @@ pub async fn persist_new_image_handler(
                                 .ok_or_else(|| warp::reject::reject())?
                                 .to_string()
                         }
-                        Some(file_type) => {
-                            eprintln!("invalid file type found: {}", file_type);
-                            return Err(warp::reject::reject());
-                        }
-                        None => {
-                            eprintln!("file type could not be determined");
+                        _ => {
                             return Err(warp::reject::reject());
                         }
                     }

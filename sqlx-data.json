@@ -1,5 +1,25 @@
 {
   "db": "PostgreSQL",
+  "163151100cfc2c3899f5da7845c96da363e1cafa0775142ced5f138f80d80247": {
+    "query": "SELECT users.admin AS admin FROM tokens LEFT JOIN users ON users.id = tokens.user_id WHERE tokens.token = $1 AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "admin",
+          "type_info": "Bool"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Bpchar"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
   "248a9b412b0e511c5a50c26c70059069f41cdb523b61805ccc3b3ba00e2f06c3": {
     "query": "\n        INSERT INTO page_revisions\n        (slug, editor_id, version, body)\n        VALUES\n        ($1, $2, $3, $4)",
     "describe": {
@@ -73,58 +93,6 @@
       "nullable": []
     }
   },
-  "741eab689d8f0a2aaaf9f736bc6c5a305e904e535969bc3b77d44c6238e2a6d8": {
-    "query": "SELECT users.id AS user_id, users.username AS username\n        FROM tokens LEFT JOIN users\n        ON users.id = tokens.user_id\n        WHERE token = $1 AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "user_id",
-          "type_info": "Int4"
-        },
-        {
-          "ordinal": 1,
-          "name": "username",
-          "type_info": "Varchar"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Bpchar"
-        ]
-      },
-      "nullable": [
-        false,
-        false
-      ]
-    }
-  },
-  "771f2a72d0a796e25f90e1837fc601593a7071e8d790fcda5dcf004caa95fb45": {
-    "query": "SELECT id, password FROM users WHERE username = $1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "id",
-          "type_info": "Int4"
-        },
-        {
-          "ordinal": 1,
-          "name": "password",
-          "type_info": "Varchar"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      },
-      "nullable": [
-        false,
-        false
-      ]
-    }
-  },
   "7b89692693124924062251c254345b0a1194e28df3371d7835087f6bdaf07818": {
     "query": "\n        DELETE FROM images\n        WHERE slug = $1 AND owner_id = $2",
     "describe": {
@@ -167,38 +135,6 @@
         false,
         false,
         null
-      ]
-    }
-  },
-  "8ff22499f268b7618b9c9cca94334fbbb4ba432cb014aacc087f684693f23047": {
-    "query": "SELECT owner_id, current_version, body FROM pages WHERE slug = $1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "owner_id",
-          "type_info": "Int4"
-        },
-        {
-          "ordinal": 1,
-          "name": "current_version",
-          "type_info": "Int4"
-        },
-        {
-          "ordinal": 2,
-          "name": "body",
-          "type_info": "Text"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      },
-      "nullable": [
-        false,
-        false,
-        true
       ]
     }
   },
@@ -327,6 +263,64 @@
       "nullable": []
     }
   },
+  "b3a42a722968bf975bd54c243ca31676491cd733e1c57c72e97378ddfba09e43": {
+    "query": "SELECT users.id AS user_id, users.username AS username, users.admin AS admin FROM tokens LEFT JOIN users\n        ON users.id = tokens.user_id\n        WHERE token = $1 AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "user_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "username",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "admin",
+          "type_info": "Bool"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Bpchar"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "c27ac5f99056b4c1ec01107b701836a4638ac5f54c54934cbf5ff8ce5310a78d": {
+    "query": "SELECT current_version, body FROM pages WHERE slug = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "current_version",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "body",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        true
+      ]
+    }
+  },
   "c37318cbb4819ed89b5f655ff82fc18ac4c556d582651d598067e675d0940422": {
     "query": "SELECT title, rendered_body FROM pages WHERE slug = $1",
     "describe": {
@@ -366,6 +360,68 @@
       "nullable": []
     }
   },
+  "ccb89231c666622d7f5a2134824770f248b28f575928b94bff939e95fd921971": {
+    "query": "SELECT username, id, TO_CHAR(created_at, 'MM/DD/YYYY HH24:MI:SS') AS created_at FROM users WHERE state = 'pending' ORDER BY created_at DESC",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "username",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 2,
+          "name": "created_at",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": []
+      },
+      "nullable": [
+        false,
+        false,
+        null
+      ]
+    }
+  },
+  "d1090eabd3129299d606877a36ec1b0d6bd835089b0b6ba1dbafbc04fae98c7f": {
+    "query": "SELECT id, password, state FROM users WHERE username = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "password",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "state",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false
+      ]
+    }
+  },
   "d109aca39e188442792a6b613d8966bf69e1efdf49c6e158ad66e7104c1f82f2": {
     "query": "SELECT slug, title FROM pages WHERE owner_id = $1",
     "describe": {
@@ -390,6 +446,19 @@
         false,
         true
       ]
+    }
+  },
+  "d447bd37a70e760c159ce979ffbb4b60fedf977e7f9746ed0593e7c79b5b2130": {
+    "query": "UPDATE users SET state = $1 WHERE id = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Int4"
+        ]
+      },
+      "nullable": []
     }
   },
   "d46cee286f9ab6203416901c6a1e6e0b7a6ed7379756f82a0ac0ac2ab12d788d": {

@@ -1,5 +1,20 @@
 {
   "db": "PostgreSQL",
+  "248a9b412b0e511c5a50c26c70059069f41cdb523b61805ccc3b3ba00e2f06c3": {
+    "query": "\n        INSERT INTO page_revisions\n        (slug, editor_id, version, body)\n        VALUES\n        ($1, $2, $3, $4)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Int4",
+          "Int4",
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "25d0ae3ed083a39e1b35fe36fe63fb63067fc5ea71e43875ad23d74e1c596695": {
     "query": "\n        INSERT INTO pages\n        (owner_id, slug, title, body, rendered_body, updated_at)\n        VALUES\n        ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)",
     "describe": {
@@ -30,6 +45,60 @@
       "nullable": []
     }
   },
+  "4bc049ad29c5f94758c30d769be07686ea07c9eb201611e62daa47094d9acf6f": {
+    "query": "\n        INSERT INTO images\n        (owner_id, slug, extension, alt_text)\n        VALUES\n        ($1, $2, $3, $4)",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Varchar",
+          "Varchar",
+          "Varchar"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "618e2556034313e9bb651908a687d4f146d8952fe2a08f9870fa07ed1781bc4a": {
+    "query": "\n        DELETE FROM pages\n        WHERE slug = $1 AND owner_id = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "741eab689d8f0a2aaaf9f736bc6c5a305e904e535969bc3b77d44c6238e2a6d8": {
+    "query": "SELECT users.id AS user_id, users.username AS username\n        FROM tokens LEFT JOIN users\n        ON users.id = tokens.user_id\n        WHERE token = $1 AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "user_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "username",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Bpchar"
+        ]
+      },
+      "nullable": [
+        false,
+        false
+      ]
+    }
+  },
   "771f2a72d0a796e25f90e1837fc601593a7071e8d790fcda5dcf004caa95fb45": {
     "query": "SELECT id, password FROM users WHERE username = $1",
     "describe": {
@@ -53,6 +122,160 @@
       "nullable": [
         false,
         false
+      ]
+    }
+  },
+  "7b89692693124924062251c254345b0a1194e28df3371d7835087f6bdaf07818": {
+    "query": "\n        DELETE FROM images\n        WHERE slug = $1 AND owner_id = $2",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Int4"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "8a8cfee896bdc95a388ac14b888868a5cdc9ad3b277ed4e5ff741dc3407bc9db": {
+    "query": "SELECT users.username AS editor, page_revisions.version AS version, TO_CHAR(page_revisions.updated_at, 'MM/DD/YYYY HH24:MI:SS') AS updated_at FROM page_revisions LEFT JOIN users\n        ON users.id = page_revisions.editor_id\n        WHERE slug = $1 ORDER BY updated_at DESC",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "editor",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 1,
+          "name": "version",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 2,
+          "name": "updated_at",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        null
+      ]
+    }
+  },
+  "8ff22499f268b7618b9c9cca94334fbbb4ba432cb014aacc087f684693f23047": {
+    "query": "SELECT owner_id, current_version, body FROM pages WHERE slug = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "owner_id",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 1,
+          "name": "current_version",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 2,
+          "name": "body",
+          "type_info": "Text"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        true
+      ]
+    }
+  },
+  "98eefe88f69d608602083c8d340128853bfbbcd4c37dd703f90b73645b19bcee": {
+    "query": "\n        SELECT extension\n        FROM images\n        WHERE slug = $1 AND owner_id = $2",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "extension",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Int4"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "a347db33693c5d57eaa8a5b77f5f3df500131f8b79f53dc3a31d00eab7ceb675": {
+    "query": "SELECT CONCAT(slug, '.', extension) AS slug_with_extension, slug, alt_text FROM images WHERE owner_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "slug_with_extension",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 1,
+          "name": "slug",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "alt_text",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      },
+      "nullable": [
+        null,
+        false,
+        true
+      ]
+    }
+  },
+  "a7605a9d247018205b21f384fbdff436f0d569e5f92fb590930003daa96d802f": {
+    "query": "SELECT slug, title FROM pages ORDER BY updated_at DESC LIMIT 3",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "slug",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 1,
+          "name": "title",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": []
+      },
+      "nullable": [
+        false,
+        true
       ]
     }
   },
@@ -104,32 +327,6 @@
       "nullable": []
     }
   },
-  "b308fbd746ba6e6018cdb9992397f0fdc2aa7fc3e0b2831b868970b5f21b9062": {
-    "query": "SELECT owner_id, current_version FROM pages WHERE slug = $1",
-    "describe": {
-      "columns": [
-        {
-          "ordinal": 0,
-          "name": "owner_id",
-          "type_info": "Int4"
-        },
-        {
-          "ordinal": 1,
-          "name": "current_version",
-          "type_info": "Int4"
-        }
-      ],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      },
-      "nullable": [
-        false,
-        false
-      ]
-    }
-  },
   "c37318cbb4819ed89b5f655ff82fc18ac4c556d582651d598067e675d0940422": {
     "query": "SELECT title, rendered_body FROM pages WHERE slug = $1",
     "describe": {
@@ -167,6 +364,32 @@
         ]
       },
       "nullable": []
+    }
+  },
+  "d109aca39e188442792a6b613d8966bf69e1efdf49c6e158ad66e7104c1f82f2": {
+    "query": "SELECT slug, title FROM pages WHERE owner_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "slug",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 1,
+          "name": "title",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      },
+      "nullable": [
+        false,
+        true
+      ]
     }
   },
   "d46cee286f9ab6203416901c6a1e6e0b7a6ed7379756f82a0ac0ac2ab12d788d": {

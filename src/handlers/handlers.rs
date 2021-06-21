@@ -993,6 +993,7 @@ pub async fn persist_new_image_handler(
     form_data: FormData,
     db: Pool<Postgres>,
     templates: Handlebars<'_>,
+    config: Config,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<HandlerReturn, warp::Rejection> {
     let parts: Vec<Part> = form_data
@@ -1102,7 +1103,7 @@ pub async fn persist_new_image_handler(
     let image_data = image_data.ok_or_else(|| warp::reject::reject())?;
     let extension = extension.ok_or_else(|| warp::reject::reject())?;
 
-    let filename = format!("./assets/img/{}.{}", slug, extension);
+    let filename = config.image_path.join(format!("{}.{}", slug, extension));
 
     // TODO(jsvana): add flash for existing file
     let mut file = OpenOptions::new()
@@ -1365,6 +1366,7 @@ pub async fn delete_image_handler(
     tail: Tail,
     db: Pool<Postgres>,
     templates: Handlebars<'_>,
+    config: Config,
     mut session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<HandlerReturn, warp::Rejection> {
     let slug = tail.as_str().to_string();
@@ -1412,6 +1414,28 @@ pub async fn delete_image_handler(
         }
     };
 
+    let extension = match sqlx::query!(
+        r#"
+        SELECT extension
+        FROM images
+        WHERE slug = $1 AND owner_id = $2"#,
+        slug,
+        user_id,
+    )
+    .fetch_one(&mut tx)
+    .await
+    {
+        Ok(row) => row.extension,
+        Err(e) => {
+            return Ok(error_html(
+                &format!("Error deleting image: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
+                session_with_store,
+            ));
+        }
+    };
+
     if let Err(e) = sqlx::query!(
         r#"
         DELETE FROM images
@@ -1424,6 +1448,17 @@ pub async fn delete_image_handler(
     {
         return Ok(error_html(
             &format!("Error deleting image: {}", e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
+            session_with_store,
+        ));
+    }
+
+    if let Err(e) =
+        tokio::fs::remove_file(config.image_path.join(format!("{}.{}", slug, extension))).await
+    {
+        return Ok(error_html(
+            &format!("Error removing image file: {}", e),
             StatusCode::INTERNAL_SERVER_ERROR,
             &templates,
             session_with_store,

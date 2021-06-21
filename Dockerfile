@@ -29,4 +29,6 @@ WORKDIR /usr/src/uwiki
 RUN apt-get update && apt-get install -y pandoc && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/bin/uwiki /usr/local/bin/uwiki
 COPY --from=builder /usr/src/uwiki/assets /usr/src/uwiki/assets
+VOLUME /images
+
 CMD ["uwiki"]

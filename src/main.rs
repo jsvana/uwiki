@@ -18,6 +18,7 @@ pub struct Config {
     database_url: String,
     token_ttl: Duration,
     asset_template_path: PathBuf,
+    image_path: PathBuf,
 }
 
 #[tokio::main]
@@ -43,6 +44,10 @@ async fn main() -> Result<()> {
             .context("Missing env var $ASSET_TEMPLATE_PATH")?
             .parse()
             .context("failed to parse ASSET_TEMPLATE_PATH")?,
+        image_path: dotenv::var("IMAGE_PATH")
+            .context("Missing env var $IMAGE_PATH")?
+            .parse()
+            .context("failed to parse IMAGE_PATH")?,
     };
 
     let pool = PgPoolOptions::new()
@@ -78,7 +83,7 @@ async fn main() -> Result<()> {
     let session_store = MemoryStore::new();
 
     let css = warp::path("css").and(warp::fs::dir("assets/css"));
-    let images = warp::path("img").and(warp::fs::dir("assets/img"));
+    let images = warp::path("img").and(warp::fs::dir(config.image_path.clone()));
 
     let mut headers = HeaderMap::new();
     headers.insert("cache_control", HeaderValue::from_static("no-cache"));
@@ -232,6 +237,7 @@ async fn main() -> Result<()> {
         .and(warp::filters::multipart::form())
         .and(handlers::with_db(pool.clone()))
         .and(handlers::with_templates(handlebars.clone()))
+        .and(handlers::with_config(config.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
             None,
@@ -275,6 +281,7 @@ async fn main() -> Result<()> {
         .and(warp::path::tail())
         .and(handlers::with_db(pool.clone()))
         .and(handlers::with_templates(handlebars.clone()))
+        .and(handlers::with_config(config.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
             None,

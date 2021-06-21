@@ -66,6 +66,7 @@ async fn main() -> Result<()> {
         "upload_image",
         "user",
         "page_history",
+        "new_user",
     ];
     let mut handlebars = Handlebars::new();
 
@@ -101,12 +102,62 @@ async fn main() -> Result<()> {
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
 
-    let add_user = warp::post()
-        .and(warp::path("u"))
-        .and(warp::body::content_length_limit(1024 * 16))
-        .and(warp::body::json())
+    let new_user_page = warp::get()
+        .and(warp::path("users"))
+        .and(warp::path("request"))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::new_user_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let request_new_user = warp::post()
+        .and(warp::path("users"))
+        .and(warp::path("request"))
+        .and(warp::body::form())
         .and(handlers::with_db(pool.clone()))
-        .and_then(handlers::add_user_handler);
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::request_new_user_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let approve_user = warp::post()
+        .and(warp::path("users"))
+        .and(warp::path::param())
+        .and(warp::path("approve"))
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::approve_user_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let reject_user = warp::post()
+        .and(warp::path("users"))
+        .and(warp::path::param())
+        .and(warp::path("reject"))
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::reject_user_handler)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
 
     let login = warp::get()
         .and(warp::path("login"))
@@ -312,7 +363,10 @@ async fn main() -> Result<()> {
         css.or(images)
             .or(index)
             .or(login)
-            .or(add_user)
+            .or(new_user_page)
+            .or(request_new_user)
+            .or(approve_user)
+            .or(reject_user)
             .or(authenticate)
             .or(render_wiki)
             .or(get_page)

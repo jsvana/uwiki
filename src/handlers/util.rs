@@ -1,3 +1,5 @@
+use std::fmt;
+
 use handlebars::Handlebars;
 use log::debug;
 use serde_derive::Serialize;
@@ -53,6 +55,33 @@ pub struct Revision {
     pub editor: String,
     pub version: i32,
     pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct User {
+    pub username: String,
+    pub id: i32,
+    pub created_at: Option<String>,
+}
+
+pub enum UserState {
+    Pending,
+    Active,
+    Rejected,
+}
+
+impl fmt::Display for UserState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                UserState::Pending => "pending",
+                UserState::Active => "active",
+                UserState::Rejected => "rejected",
+            }
+        )
+    }
 }
 
 pub async fn get_current_username(

@@ -22,7 +22,7 @@ use warp_sessions::{MemoryStore, SessionWithStore};
 
 use crate::handlers::util::{
     attempt_to_set_flash, error_html, error_redirect, get_and_clear_flash, get_current_username,
-    HandlerReturn, Image, Page, Revision,
+    HandlerReturn, Image, Page, Revision, User, UserState,
 };
 use crate::{value_or_error_redirect, Config};
 
@@ -48,7 +48,7 @@ pub async fn index_handler(
     db: Pool<Postgres>,
     templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
-) -> Result<(Box<dyn warp::Reply>, SessionWithStore<MemoryStore>), warp::Rejection> {
+) -> Result<HandlerReturn, warp::Rejection> {
     let (flash, session_with_store) = get_and_clear_flash(session_with_store);
 
     let current_username = get_current_username(&db, &session_with_store).await;
@@ -97,19 +97,42 @@ pub async fn index_handler(
     ))
 }
 
-pub async fn add_user_handler(
-    request: uwiki_types::AddUserRequest,
-    db: Pool<Postgres>,
-) -> Result<impl warp::Reply, Infallible> {
-    let hashed_password = match hash(request.password, DEFAULT_COST) {
-        Ok(password) => password,
+pub async fn new_user_handler(
+    templates: Handlebars<'_>,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<HandlerReturn, warp::Rejection> {
+    let text = match templates.render("new_user", &json!({})) {
+        Ok(text) => text,
         Err(e) => {
-            return Ok(warp::reply::json(&uwiki_types::AddUserResponse {
-                success: false,
-                message: format!("Error hashing password: {}", e),
-            }));
+            format!("<html>Error rendering new user template: {}</html>", e)
         }
     };
+
+    Ok((
+        Box::new(warp::reply::with_status(
+            warp::reply::html(text),
+            StatusCode::OK,
+        )),
+        session_with_store,
+    ))
+}
+
+pub async fn request_new_user_handler(
+    request: uwiki_types::AddUserRequest,
+    db: Pool<Postgres>,
+    mut session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<HandlerReturn, warp::Rejection> {
+    let hashed_password = value_or_error_redirect!(
+        hash(request.password, DEFAULT_COST),
+        Uri::from_static("/"),
+        "Error hashing password",
+        session_with_store
+    );
+
+    session_with_store = attempt_to_set_flash(
+        &format!("Requested new user {}", request.username),
+        session_with_store,
+    );
 
     match sqlx::query!(
         "INSERT INTO users (username, password) VALUES ($1, $2)",
@@ -119,15 +142,128 @@ pub async fn add_user_handler(
     .execute(&db)
     .await
     {
-        Ok(_) => Ok(warp::reply::json(&uwiki_types::AddUserResponse {
-            success: true,
-            message: format!("Added user {}", request.username),
-        })),
-        Err(e) => Ok(warp::reply::json(&uwiki_types::AddUserResponse {
-            success: false,
-            message: format!("Error adding user: {}", e),
-        })),
+        Ok(_) => Ok((
+            Box::new(warp::redirect::see_other(Uri::from_static("/"))),
+            session_with_store,
+        )),
+        Err(e) => Ok(error_redirect(
+            Uri::from_static("/"),
+            format!("Internal error (error persisting data): {}", e),
+            session_with_store,
+        )),
     }
+}
+
+async fn set_user_state(
+    target_user_id: i32,
+    target_state: UserState,
+    db: Pool<Postgres>,
+    templates: Handlebars<'_>,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<HandlerReturn, warp::Rejection> {
+    let mut tx = match db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            return Ok(error_html(
+                &format!("Error communicating with database: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &templates,
+                session_with_store,
+            ));
+        }
+    };
+
+    let token = match session_with_store.session.get::<String>("sid") {
+        Some(token) => token,
+        None => {
+            return Ok(error_redirect(
+                Uri::from_static("/"),
+                "Not logged in".to_string(),
+                session_with_store,
+            ));
+        }
+    };
+
+    let admin = match sqlx::query!(
+        "SELECT users.admin AS admin \
+        FROM tokens \
+        LEFT JOIN users \
+        ON users.id = tokens.user_id \
+        WHERE tokens.token = $1 \
+        AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
+        token,
+    )
+    .fetch_one(&mut tx)
+    .await
+    {
+        Ok(row) => (row.admin),
+        Err(_) => {
+            return Ok(error_redirect(
+                Uri::from_static("/"),
+                "Not logged in".to_string(),
+                session_with_store,
+            ));
+        }
+    };
+
+    if !admin {
+        return Ok(error_redirect(
+            Uri::from_static("/me"),
+            "You do not have admin permissions".to_string(),
+            session_with_store,
+        ));
+    }
+
+    match sqlx::query!(
+        "UPDATE users SET state = $1 WHERE id = $2",
+        target_state.to_string(),
+        target_user_id
+    )
+    .execute(&db)
+    .await
+    {
+        Ok(_) => Ok((
+            Box::new(warp::redirect::see_other(Uri::from_static("/me"))),
+            session_with_store,
+        )),
+        Err(e) => Ok(error_redirect(
+            Uri::from_static("/me"),
+            format!("Internal error (error persisting data): {}", e),
+            session_with_store,
+        )),
+    }
+}
+
+pub async fn approve_user_handler(
+    user_id: i32,
+    db: Pool<Postgres>,
+    templates: Handlebars<'_>,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<HandlerReturn, warp::Rejection> {
+    set_user_state(
+        user_id,
+        UserState::Active,
+        db,
+        templates,
+        session_with_store,
+    )
+    .await
+}
+
+pub async fn reject_user_handler(
+    user_id: i32,
+    db: Pool<Postgres>,
+    templates: Handlebars<'_>,
+    session_with_store: SessionWithStore<MemoryStore>,
+) -> Result<HandlerReturn, warp::Rejection> {
+    set_user_state(
+        user_id,
+        UserState::Rejected,
+        db,
+        templates,
+        session_with_store,
+    )
+    .await
 }
 
 pub async fn login_handler(
@@ -164,7 +300,7 @@ pub async fn authenticate_handler(
 
     let user = value_or_error_redirect!(
         sqlx::query!(
-            "SELECT id, password FROM users WHERE username = $1",
+            "SELECT id, password, state FROM users WHERE username = $1",
             request.username,
         )
         .fetch_one(&mut tx)
@@ -173,6 +309,15 @@ pub async fn authenticate_handler(
         "Invalid username or password",
         session_with_store
     );
+
+    // TODO(jsvana): read UserState from DB instead of string
+    if user.state != "active" {
+        return Ok(error_redirect(
+            Uri::from_static("/"),
+            "Account not yet marked active".to_string(),
+            session_with_store,
+        ));
+    }
 
     if let Ok(false) | Err(_) = verify(request.password, &user.password) {
         return Ok(error_redirect(
@@ -235,7 +380,7 @@ pub async fn authenticate_handler(
 
     match tx.commit().await {
         Ok(_) => Ok((
-            Box::new(warp::redirect::see_other(Uri::from_static("/"))),
+            Box::new(warp::redirect::see_other(Uri::from_static("/me"))),
             session_with_store,
         )),
         Err(e) => Ok(error_redirect(
@@ -1180,8 +1325,11 @@ pub async fn user_handler(
         }
     };
 
-    let (user_id, username) = match sqlx::query!(
-        "SELECT users.id AS user_id, users.username AS username
+    let (user_id, username, admin) = match sqlx::query!(
+        "SELECT \
+        users.id AS user_id, \
+        users.username AS username, \
+        users.admin AS admin \
         FROM tokens \
         LEFT JOIN users
         ON users.id = tokens.user_id
@@ -1192,7 +1340,7 @@ pub async fn user_handler(
     .fetch_one(&mut tx)
     .await
     {
-        Ok(row) => (row.user_id, row.username),
+        Ok(row) => (row.user_id, row.username, row.admin),
         Err(_) => {
             return Ok(error_redirect(
                 Uri::from_static("/"),
@@ -1252,9 +1400,42 @@ pub async fn user_handler(
         _ => Some(images),
     };
 
+    let approvals = if admin {
+        let approvals = match sqlx::query_as!(
+            User,
+            "SELECT \
+            username, \
+            id, \
+            TO_CHAR(created_at, 'MM/DD/YYYY HH24:MI:SS') AS created_at \
+            FROM users \
+            WHERE state = 'pending' \
+            ORDER BY created_at DESC",
+        )
+        .fetch_all(&mut tx)
+        .await
+        {
+            Ok(approvals) => approvals,
+            Err(e) => {
+                return Ok(error_html(
+                    &format!("Unable to fetch account approvals: {}", e),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &templates,
+                    session_with_store,
+                ));
+            }
+        };
+
+        match approvals.len() {
+            0 => None,
+            _ => Some(approvals),
+        }
+    } else {
+        None
+    };
+
     let text = match templates.render(
         "user",
-        &json!({ "flash": flash, "pages": pages, "images": images, "current_username": username}),
+        &json!({ "flash": flash, "pages": pages, "images": images, "approvals": approvals, "current_username": username}),
     ) {
         Ok(text) => text,
         Err(e) => {

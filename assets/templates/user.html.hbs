@@ -46,6 +46,42 @@
           <p>No images yet.</p>
         {{/if}}
 
+        {{#if approvals}}
+          <h4>Pending account approvals</h4>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Requested at</th>
+                <th>Approve</th>
+                <th>Reject</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {{#each approvals}}
+                <tr>
+                  <td>{{this.username}}</td>
+                  <td>{{this.created_at}}</td>
+                  <td>
+                    <form action="/users/{{this.id}}/approve" method="post">
+                      <input type="submit" value="Approve" class="button-primary" />
+                    </form>
+                  </td>
+                  <td>
+                    <form action="/users/{{this.id}}/reject" method="post">
+                      <input type="submit" value="Reject" />
+                    </form>
+                  </td>
+                </tr>
+              {{/each}}
+            </tbody>
+          </table>
+        {{else}}
+          <p>No pending account approvals.</p>
+        {{/if}}
+
         <div class="row">
           <a href="/pages/create">Create new page</a>
           <a href="/images/create">Upload new image</a>

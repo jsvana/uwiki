@@ -21,12 +21,12 @@
 
       <div class="row">
         {{#if current_username}}
-          <form action="/images/delete/{{slug}}", method="post">
+          <form action="/pages/delete/{{slug}}", method="post">
             <a href="/">Home</a>
 
             <a href="/pages/history/{{slug}}">History</a>
 
-            <a href="/e/{{slug}}">Edit</a>
+            <a href="/pages/update/{{slug}}">Edit</a>
 
             <input type="submit" value="Delete" />
           </form>

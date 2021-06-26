@@ -102,6 +102,7 @@ async fn main() -> Result<()> {
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
 
+    // Users
     let new_user_page = warp::get()
         .and(warp::path("users"))
         .and(warp::path("request"))
@@ -110,7 +111,7 @@ async fn main() -> Result<()> {
             session_store.clone(),
             None,
         ))
-        .and_then(handlers::new_user_handler)
+        .and_then(handlers::users::render_create)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
@@ -124,7 +125,7 @@ async fn main() -> Result<()> {
             session_store.clone(),
             None,
         ))
-        .and_then(handlers::request_new_user_handler)
+        .and_then(handlers::users::create)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
@@ -139,7 +140,7 @@ async fn main() -> Result<()> {
             session_store.clone(),
             None,
         ))
-        .and_then(handlers::approve_user_handler)
+        .and_then(handlers::users::approve)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
@@ -154,7 +155,7 @@ async fn main() -> Result<()> {
             session_store.clone(),
             None,
         ))
-        .and_then(handlers::reject_user_handler)
+        .and_then(handlers::users::reject)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
@@ -166,13 +167,13 @@ async fn main() -> Result<()> {
             session_store.clone(),
             None,
         ))
-        .and_then(handlers::login_handler)
+        .and_then(handlers::users::render_login)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
 
     let authenticate = warp::post()
-        .and(warp::path("a"))
+        .and(warp::path("login"))
         .and(warp::body::form())
         .and(handlers::with_db(pool.clone()))
         .and(handlers::with_config(config.clone()))
@@ -180,7 +181,81 @@ async fn main() -> Result<()> {
             session_store.clone(),
             None,
         ))
-        .and_then(handlers::authenticate_handler)
+        .and_then(handlers::users::login)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let user = warp::get()
+        .and(warp::path("me"))
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::users::render)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    // Pages
+    let create_page = warp::get()
+        .and(warp::path("pages"))
+        .and(warp::path("create"))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(handlers::with_db(pool.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::pages::render_create)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let persist_new_page = warp::post()
+        .and(warp::path("pages"))
+        .and(warp::path("create"))
+        .and(warp::body::form())
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::pages::create)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let edit_page = warp::get()
+        .and(warp::path("pages"))
+        .and(warp::path("update"))
+        .and(warp::path::tail())
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::pages::render_update)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let set_page = warp::post()
+        .and(warp::path("pages"))
+        .and(warp::path("update"))
+        .and(warp::path::tail())
+        .and(warp::body::form())
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::pages::update)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
@@ -194,119 +269,21 @@ async fn main() -> Result<()> {
             session_store.clone(),
             None,
         ))
-        .and_then(handlers::render_handler)
+        .and_then(handlers::pages::render)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
 
     let get_page = warp::post()
-        .and(warp::path("g"))
-        .and(warp::path::tail())
-        .and(handlers::with_db(pool.clone()))
-        .and(warp_sessions::request::with_session(
-            session_store.clone(),
-            None,
-        ))
-        .and_then(handlers::get_page_handler)
-        .untuple_one()
-        .and_then(warp_sessions::reply::with_session)
-        .with(warp::reply::with::headers(headers.clone()));
-
-    let edit_page = warp::get()
-        .and(warp::path("e"))
-        .and(warp::path::tail())
-        .and(handlers::with_db(pool.clone()))
-        .and(handlers::with_templates(handlebars.clone()))
-        .and(warp_sessions::request::with_session(
-            session_store.clone(),
-            None,
-        ))
-        .and_then(handlers::edit_page_handler)
-        .untuple_one()
-        .and_then(warp_sessions::reply::with_session)
-        .with(warp::reply::with::headers(headers.clone()));
-
-    let set_page = warp::post()
-        .and(warp::path("s"))
-        .and(warp::path::tail())
-        .and(warp::body::form())
-        .and(handlers::with_db(pool.clone()))
-        .and(handlers::with_templates(handlebars.clone()))
-        .and(warp_sessions::request::with_session(
-            session_store.clone(),
-            None,
-        ))
-        .and_then(handlers::set_page_handler)
-        .untuple_one()
-        .and_then(warp_sessions::reply::with_session)
-        .with(warp::reply::with::headers(headers.clone()));
-
-    let create_page = warp::get()
+        .and(warp::path("api"))
         .and(warp::path("pages"))
-        .and(warp::path("create"))
-        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp::path::tail())
         .and(handlers::with_db(pool.clone()))
         .and(warp_sessions::request::with_session(
             session_store.clone(),
             None,
         ))
-        .and_then(handlers::create_page_handler)
-        .untuple_one()
-        .and_then(warp_sessions::reply::with_session)
-        .with(warp::reply::with::headers(headers.clone()));
-
-    let persist_new_page = warp::post()
-        .and(warp::path("c"))
-        .and(warp::body::form())
-        .and(handlers::with_db(pool.clone()))
-        .and(handlers::with_templates(handlebars.clone()))
-        .and(warp_sessions::request::with_session(
-            session_store.clone(),
-            None,
-        ))
-        .and_then(handlers::persist_new_page_handler)
-        .untuple_one()
-        .and_then(warp_sessions::reply::with_session)
-        .with(warp::reply::with::headers(headers.clone()));
-
-    let upload_image = warp::get()
-        .and(warp::path("images"))
-        .and(warp::path("create"))
-        .and(handlers::with_templates(handlebars.clone()))
-        .and(handlers::with_db(pool.clone()))
-        .and(warp_sessions::request::with_session(
-            session_store.clone(),
-            None,
-        ))
-        .and_then(handlers::upload_image_page_handler)
-        .untuple_one()
-        .and_then(warp_sessions::reply::with_session)
-        .with(warp::reply::with::headers(headers.clone()));
-
-    let persist_new_image = warp::post()
-        .and(warp::path("ui"))
-        .and(warp::filters::multipart::form())
-        .and(handlers::with_db(pool.clone()))
-        .and(handlers::with_templates(handlebars.clone()))
-        .and(handlers::with_config(config.clone()))
-        .and(warp_sessions::request::with_session(
-            session_store.clone(),
-            None,
-        ))
-        .and_then(handlers::persist_new_image_handler)
-        .untuple_one()
-        .and_then(warp_sessions::reply::with_session)
-        .with(warp::reply::with::headers(headers.clone()));
-
-    let user = warp::get()
-        .and(warp::path("me"))
-        .and(handlers::with_db(pool.clone()))
-        .and(handlers::with_templates(handlebars.clone()))
-        .and(warp_sessions::request::with_session(
-            session_store.clone(),
-            None,
-        ))
-        .and_then(handlers::user_handler)
+        .and_then(handlers::pages::api_get)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
@@ -321,7 +298,53 @@ async fn main() -> Result<()> {
             session_store.clone(),
             None,
         ))
-        .and_then(handlers::delete_page_handler)
+        .and_then(handlers::pages::delete)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let page_history = warp::get()
+        .and(warp::path("pages"))
+        .and(warp::path("history"))
+        .and(warp::path::tail())
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::pages::history)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    // Images
+    let upload_image = warp::get()
+        .and(warp::path("images"))
+        .and(warp::path("create"))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(handlers::with_db(pool.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::images::render_create)
+        .untuple_one()
+        .and_then(warp_sessions::reply::with_session)
+        .with(warp::reply::with::headers(headers.clone()));
+
+    let persist_new_image = warp::post()
+        .and(warp::path("images"))
+        .and(warp::path("create"))
+        .and(warp::filters::multipart::form())
+        .and(handlers::with_db(pool.clone()))
+        .and(handlers::with_templates(handlebars.clone()))
+        .and(handlers::with_config(config.clone()))
+        .and(warp_sessions::request::with_session(
+            session_store.clone(),
+            None,
+        ))
+        .and_then(handlers::images::create)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));
@@ -337,22 +360,7 @@ async fn main() -> Result<()> {
             session_store.clone(),
             None,
         ))
-        .and_then(handlers::delete_image_handler)
-        .untuple_one()
-        .and_then(warp_sessions::reply::with_session)
-        .with(warp::reply::with::headers(headers.clone()));
-
-    let page_history = warp::get()
-        .and(warp::path("pages"))
-        .and(warp::path("history"))
-        .and(warp::path::tail())
-        .and(handlers::with_db(pool.clone()))
-        .and(handlers::with_templates(handlebars.clone()))
-        .and(warp_sessions::request::with_session(
-            session_store.clone(),
-            None,
-        ))
-        .and_then(handlers::page_history_handler)
+        .and_then(handlers::images::delete)
         .untuple_one()
         .and_then(warp_sessions::reply::with_session)
         .with(warp::reply::with::headers(headers.clone()));

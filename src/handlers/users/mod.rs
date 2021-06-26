@@ -2,7 +2,7 @@ use std::convert::TryInto;
 use std::iter;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use handlebars::Handlebars;
 use rand::distributions::Alphanumeric;
@@ -16,7 +16,7 @@ use crate::handlers::util::{
     attempt_to_set_flash, error_html, error_redirect, get_and_clear_flash, HandlerReturn, Image,
     Page, User, UserState,
 };
-use crate::{value_or_error_redirect, Config};
+use crate::{value_or_error_html, value_or_error_redirect, Config};
 
 pub async fn render_create(
     templates: Handlebars<'_>,
@@ -82,50 +82,41 @@ async fn set_user_state(
     templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<HandlerReturn, warp::Rejection> {
-    let mut tx = match db.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            return Ok(error_html(
-                &format!("Error communicating with database: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+    let mut tx = value_or_error_html!(
+        db.begin().await,
+        "Error communicating with database",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
+    );
 
-    let token = match session_with_store.session.get::<String>("sid") {
-        Some(token) => token,
-        None => {
-            return Ok(error_redirect(
-                Uri::from_static("/"),
-                "Not logged in".to_string(),
-                session_with_store,
-            ));
-        }
-    };
+    let token = value_or_error_redirect!(
+        session_with_store
+            .session
+            .get::<String>("sid")
+            .ok_or_else(|| anyhow!("missing sid token")),
+        Uri::from_static("/"),
+        "Not logged in".to_string(),
+        session_with_store
+    );
 
-    let admin = match sqlx::query!(
-        "SELECT users.admin AS admin \
+    let admin = value_or_error_redirect!(
+        sqlx::query!(
+            "SELECT users.admin AS admin \
         FROM tokens \
         LEFT JOIN users \
         ON users.id = tokens.user_id \
         WHERE tokens.token = $1 \
         AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
-        token,
+            token,
+        )
+        .fetch_one(&mut tx)
+        .await,
+        Uri::from_static("/"),
+        "Not logged in".to_string(),
+        session_with_store
     )
-    .fetch_one(&mut tx)
-    .await
-    {
-        Ok(row) => (row.admin),
-        Err(_) => {
-            return Ok(error_redirect(
-                Uri::from_static("/"),
-                "Not logged in".to_string(),
-                session_with_store,
-            ));
-        }
-    };
+    .admin;
 
     if !admin {
         return Ok(error_redirect(
@@ -330,20 +321,17 @@ pub async fn render(
         }
     };
 
-    let mut tx = match db.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            return Ok(error_html(
-                &format!("Error generating user page: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+    let mut tx = value_or_error_html!(
+        db.begin().await,
+        "Error generating user page",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
+    );
 
-    let (user_id, username, admin) = match sqlx::query!(
-        "SELECT \
+    let row = value_or_error_redirect!(
+        sqlx::query!(
+            "SELECT \
         users.id AS user_id, \
         users.username AS username, \
         users.admin AS admin \
@@ -352,65 +340,50 @@ pub async fn render(
         ON users.id = tokens.user_id
         WHERE token = $1 \
         AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
-        token,
-    )
-    .fetch_one(&mut tx)
-    .await
-    {
-        Ok(row) => (row.user_id, row.username, row.admin),
-        Err(_) => {
-            return Ok(error_redirect(
-                Uri::from_static("/"),
-                "Not logged in".to_string(),
-                session_with_store,
-            ));
-        }
-    };
+            token,
+        )
+        .fetch_one(&mut tx)
+        .await,
+        Uri::from_static("/"),
+        "Not logged in".to_string(),
+        session_with_store
+    );
+    let (user_id, username, admin) = (row.user_id, row.username, row.admin);
 
-    let pages = match sqlx::query_as!(
-        Page,
-        "SELECT slug, title FROM pages \
+    let pages = value_or_error_html!(
+        sqlx::query_as!(
+            Page,
+            "SELECT slug, title FROM pages \
         WHERE owner_id = $1",
-        user_id
-    )
-    .fetch_all(&db)
-    .await
-    {
-        Ok(pages) => pages,
-        Err(e) => {
-            return Ok(error_html(
-                &format!("Unable to fetch owned pages: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+            user_id
+        )
+        .fetch_all(&db)
+        .await,
+        "Unable to fetch owned pages",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
+    );
 
     let pages = match pages.len() {
         0 => None,
         _ => Some(pages),
     };
 
-    let images = match sqlx::query_as!(
+    let images = value_or_error_html!(
+        sqlx::query_as!(
         Image,
         "SELECT CONCAT(slug, '.', extension) AS slug_with_extension, slug, alt_text FROM images \
         WHERE owner_id = $1",
         user_id
     )
-    .fetch_all(&db)
-    .await
-    {
-        Ok(images) => images,
-        Err(e) => {
-            return Ok(error_html(
-                &format!("Unable to fetch owned images: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+        .fetch_all(&db)
+        .await,
+        "Unable to fetch owned images",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
+    );
 
     let images = match images.len() {
         0 => None,
@@ -418,29 +391,24 @@ pub async fn render(
     };
 
     let approvals = if admin {
-        let approvals = match sqlx::query_as!(
-            User,
-            "SELECT \
+        let approvals = value_or_error_html!(
+            sqlx::query_as!(
+                User,
+                "SELECT \
             username, \
             id, \
             TO_CHAR(created_at, 'MM/DD/YYYY HH24:MI:SS') AS created_at \
             FROM users \
             WHERE state = 'pending' \
             ORDER BY created_at DESC",
-        )
-        .fetch_all(&mut tx)
-        .await
-        {
-            Ok(approvals) => approvals,
-            Err(e) => {
-                return Ok(error_html(
-                    &format!("Unable to fetch account approvals: {}", e),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &templates,
-                    session_with_store,
-                ));
-            }
-        };
+            )
+            .fetch_all(&mut tx)
+            .await,
+            "Unable to fetch account approvals",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
+            session_with_store
+        );
 
         match approvals.len() {
             0 => None,

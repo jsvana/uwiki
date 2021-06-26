@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use handlebars::Handlebars;
 use pandoc::{InputFormat, InputKind, OutputFormat, OutputKind, PandocOutput};
 use serde_json::json;
@@ -12,6 +12,10 @@ use warp_sessions::{MemoryStore, SessionWithStore};
 use crate::handlers::util::{
     attempt_to_set_flash, error_html, error_redirect, get_and_clear_flash, get_current_username,
     HandlerReturn, Revision,
+};
+use crate::{
+    parse_uri_or_error_html, value_or_error_html, value_or_error_redirect,
+    value_or_error_redirect_parse_uri,
 };
 
 pub async fn render_create(
@@ -66,37 +70,29 @@ pub async fn create(
         }
     };
 
-    let mut tx = match db.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            // TODO(jsvana): should these be redirects w/ flashes instead?
-            return Ok(error_html(
-                &format!("Error setting content: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+    // TODO(jsvana): should these be redirects w/ flashes instead?
+    let mut tx = value_or_error_html!(
+        db.begin().await,
+        "Error setting content",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
+    );
 
-    let user_id = match sqlx::query!(
-        "SELECT user_id FROM tokens \
+    let user_id = value_or_error_redirect!(
+        sqlx::query!(
+            "SELECT user_id FROM tokens \
         WHERE token = $1 \
         AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
-        token,
+            token,
+        )
+        .fetch_one(&mut tx)
+        .await,
+        Uri::from_static("/login"),
+        "Not logged in".to_string(),
+        session_with_store
     )
-    .fetch_one(&mut tx)
-    .await
-    {
-        Ok(row) => row.user_id,
-        Err(_) => {
-            return Ok(error_redirect(
-                Uri::from_static("/login"),
-                "Not logged in".to_string(),
-                session_with_store,
-            ));
-        }
-    };
+    .user_id;
 
     let rendered_body = {
         let mut doc = pandoc::new();
@@ -152,17 +148,13 @@ pub async fn create(
         ));
     }
 
-    let destination_uri: warp::http::Uri = match format!("/w/{}", request.slug).parse() {
-        Ok(uri) => uri,
-        Err(e) => {
-            return Ok(error_html(
-                &format!("Error parsing slug: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+    let destination_uri: warp::http::Uri = value_or_error_html!(
+        format!("/w/{}", request.slug).parse(),
+        "Error parsing slug",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
+    );
 
     match tx.commit().await {
         Ok(_) => Ok((
@@ -186,24 +178,19 @@ pub async fn render(
 ) -> Result<HandlerReturn, Infallible> {
     let slug = tail.as_str().to_string();
 
-    let page = match sqlx::query!(
-        "SELECT title, rendered_body FROM pages WHERE slug = $1",
-        slug
-    )
-    .fetch_one(&db)
-    .await
-    {
-        Ok(page) => page,
-        Err(_) => {
-            // TODO(jsvana): add "missing" template with "create" button
-            return Ok(error_html(
-                "No such page",
-                StatusCode::NOT_FOUND,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+    // TODO(jsvana): add "missing" template with "create" button
+    let page = value_or_error_html!(
+        sqlx::query!(
+            "SELECT title, rendered_body FROM pages WHERE slug = $1",
+            slug
+        )
+        .fetch_one(&db)
+        .await,
+        "No such page",
+        StatusCode::NOT_FOUND,
+        &templates,
+        session_with_store
+    );
 
     let (title, rendered_body) = match (page.title, page.rendered_body) {
         (Some(title), Some(rendered_body)) => (title, rendered_body),
@@ -256,71 +243,40 @@ pub async fn render_update(
 ) -> Result<HandlerReturn, warp::Rejection> {
     let slug = tail.as_str().to_string();
 
-    let mut tx = match db.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            return Ok(error_html(
-                &format!("Error communicating with database: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+    let mut tx = value_or_error_html!(
+        db.begin().await,
+        "Error communicating with database",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
+    );
 
-    let token = match session_with_store.session.get::<String>("sid") {
-        Some(token) => token,
-        None => {
-            let destination_uri: warp::http::Uri = match format!("/w/{}", slug).parse() {
-                Ok(uri) => uri,
-                Err(e) => {
-                    return Ok(error_html(
-                        &format!("Error parsing slug: {}", e),
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        &templates,
-                        session_with_store,
-                    ));
-                }
-            };
+    let token = value_or_error_redirect_parse_uri!(
+        session_with_store
+            .session
+            .get::<String>("sid")
+            .ok_or_else(|| anyhow!("missing sid token")),
+        format!("/w/{}", slug),
+        "Not logged in".to_string(),
+        &templates,
+        session_with_store
+    );
 
-            return Ok(error_redirect(
-                destination_uri,
-                "Not logged in".to_string(),
-                session_with_store,
-            ));
-        }
-    };
-
-    let user_id = match sqlx::query!(
-        "SELECT user_id FROM tokens \
+    let user_id = value_or_error_redirect_parse_uri!(
+        sqlx::query!(
+            "SELECT user_id FROM tokens \
         WHERE token = $1 \
         AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
-        token,
+            token,
+        )
+        .fetch_one(&mut tx)
+        .await,
+        format!("/w/{}", slug),
+        "Not logged in".to_string(),
+        &templates,
+        session_with_store
     )
-    .fetch_one(&mut tx)
-    .await
-    {
-        Ok(row) => row.user_id,
-        Err(_) => {
-            let destination_uri: warp::http::Uri = match format!("/w/{}", slug).parse() {
-                Ok(uri) => uri,
-                Err(e) => {
-                    return Ok(error_html(
-                        &format!("Error parsing slug: {}", e),
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        &templates,
-                        session_with_store,
-                    ));
-                }
-            };
-
-            return Ok(error_redirect(
-                destination_uri,
-                "Not logged in".to_string(),
-                session_with_store,
-            ));
-        }
-    };
+    .user_id;
 
     if let Err(e) = sqlx::query!(
         "INSERT INTO pages (owner_id, slug) VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -338,23 +294,18 @@ pub async fn render_update(
         ));
     }
 
-    let page = match sqlx::query!(
-        "SELECT title, body, current_version FROM pages WHERE slug = $1",
-        slug,
-    )
-    .fetch_one(&mut tx)
-    .await
-    {
-        Ok(page) => page,
-        Err(e) => {
-            return Ok(error_html(
-                &format!("Error getting page: {}", e),
-                StatusCode::NOT_FOUND,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+    let page = value_or_error_html!(
+        sqlx::query!(
+            "SELECT title, body, current_version FROM pages WHERE slug = $1",
+            slug,
+        )
+        .fetch_one(&mut tx)
+        .await,
+        "Error getting page",
+        StatusCode::NOT_FOUND,
+        &templates,
+        session_with_store
+    );
 
     if let Err(e) = tx.commit().await {
         return Ok(error_html(
@@ -398,78 +349,53 @@ pub async fn update(
 ) -> Result<HandlerReturn, warp::Rejection> {
     let slug = tail.as_str().to_string();
 
-    let token = match session_with_store.session.get::<String>("sid") {
-        Some(token) => token,
-        None => {
-            let destination_uri: warp::http::Uri = match format!("/w/{}", slug).parse() {
-                Ok(uri) => uri,
-                Err(e) => {
-                    return Ok(error_html(
-                        &format!("Error parsing slug: {}", e),
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        &templates,
-                        session_with_store,
-                    ));
-                }
-            };
+    let token = value_or_error_redirect_parse_uri!(
+        session_with_store
+            .session
+            .get::<String>("sid")
+            .ok_or_else(|| anyhow!("missing sid token")),
+        format!("/w/{}", slug),
+        "Not logged in".to_string(),
+        &templates,
+        session_with_store
+    );
 
-            return Ok(error_redirect(
-                destination_uri,
-                "Not logged in".to_string(),
-                session_with_store,
-            ));
-        }
-    };
+    let mut tx = value_or_error_html!(
+        db.begin().await,
+        "Error setting content",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
+    );
 
-    let mut tx = match db.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            return Ok(error_html(
-                &format!("Error setting content: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
-
-    let user_id = match sqlx::query!(
-        "SELECT user_id FROM tokens \
+    let user_id = value_or_error_html!(
+        sqlx::query!(
+            "SELECT user_id FROM tokens \
         WHERE token = $1 \
         AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
-        token,
+            token,
+        )
+        .fetch_one(&mut tx)
+        .await,
+        "Invalid API token",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
     )
-    .fetch_one(&mut tx)
-    .await
-    {
-        Ok(row) => row.user_id,
-        Err(_) => {
-            return Ok(error_html(
-                "Invalid API token",
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+    .user_id;
 
-    let page = match sqlx::query!(
-        "SELECT current_version, body FROM pages WHERE slug = $1",
-        slug,
-    )
-    .fetch_one(&mut tx)
-    .await
-    {
-        Ok(page) => page,
-        Err(e) => {
-            return Ok(error_html(
-                &format!("Error getting page: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+    let page = value_or_error_html!(
+        sqlx::query!(
+            "SELECT current_version, body FROM pages WHERE slug = $1",
+            slug,
+        )
+        .fetch_one(&mut tx)
+        .await,
+        "Error getting page",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
+    );
 
     if page.current_version != request.previous_version {
         return Ok(error_html(
@@ -488,17 +414,14 @@ pub async fn update(
         doc.set_output_format(OutputFormat::Html, Vec::new());
         doc.set_input(InputKind::Pipe(request.body.clone()));
         doc.set_output(OutputKind::Pipe);
-        let output = match doc.execute() {
-            Ok(output) => output,
-            Err(e) => {
-                return Ok(error_html(
-                    &format!("Error rendering page (failed to run Pandoc: {})", e),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &templates,
-                    session_with_store,
-                ));
-            }
-        };
+
+        let output = value_or_error_html!(
+            doc.execute(),
+            "Error rendering page (failed to run Pandoc)",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &templates,
+            session_with_store
+        );
 
         match output {
             PandocOutput::ToBuffer(buffer) => buffer,
@@ -563,17 +486,8 @@ pub async fn update(
         ));
     }
 
-    let destination_uri: warp::http::Uri = match format!("/w/{}", slug).parse() {
-        Ok(uri) => uri,
-        Err(e) => {
-            return Ok(error_html(
-                &format!("Error parsing slug: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+    let destination_uri: warp::http::Uri =
+        parse_uri_or_error_html!(format!("/w/{}", slug), &templates, session_with_store);
 
     match tx.commit().await {
         Ok(_) => Ok((
@@ -706,9 +620,10 @@ pub async fn history(
 ) -> Result<HandlerReturn, warp::Rejection> {
     let slug = tail.as_str().to_string();
 
-    let revisions = match sqlx::query_as!(
-        Revision,
-        "SELECT \
+    let revisions = value_or_error_html!(
+        sqlx::query_as!(
+            Revision,
+            "SELECT \
             users.username AS editor, \
             page_revisions.version AS version, \
             TO_CHAR(page_revisions.updated_at, 'MM/DD/YYYY HH24:MI:SS') AS updated_at \
@@ -717,21 +632,15 @@ pub async fn history(
         ON users.id = page_revisions.editor_id
         WHERE slug = $1 \
         ORDER BY updated_at DESC",
-        slug,
-    )
-    .fetch_all(&db)
-    .await
-    {
-        Ok(revisions) => revisions,
-        Err(_) => {
-            return Ok(error_html(
-                "Unable to fetch page history",
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+            slug,
+        )
+        .fetch_all(&db)
+        .await,
+        "Unable to fetch page history",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
+    );
 
     let revisions = match revisions.len() {
         0 => None,
@@ -765,48 +674,39 @@ pub async fn delete(
 ) -> Result<HandlerReturn, warp::Rejection> {
     let slug = tail.as_str().to_string();
 
-    let token = match session_with_store.session.get::<String>("sid") {
-        Some(token) => token,
-        None => {
-            return Ok(error_redirect(
-                Uri::from_static("/login"),
-                "Not logged in".to_string(),
-                session_with_store,
-            ));
-        }
-    };
+    let token = value_or_error_redirect!(
+        session_with_store
+            .session
+            .get::<String>("sid")
+            .ok_or_else(|| anyhow!("missing sid token")),
+        Uri::from_static("/login"),
+        "Not logged in".to_string(),
+        session_with_store
+    );
 
-    let mut tx = match db.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            // TODO(jsvana): should these be redirects w/ flashes instead?
-            return Ok(error_html(
-                &format!("Error deleting page: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &templates,
-                session_with_store,
-            ));
-        }
-    };
+    // TODO(jsvana): should these be redirects w/ flashes instead?
+    let mut tx = value_or_error_html!(
+        db.begin().await,
+        "Error deleting page",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &templates,
+        session_with_store
+    );
 
-    let user_id = match sqlx::query!(
-        "SELECT user_id FROM tokens \
+    let user_id = value_or_error_redirect!(
+        sqlx::query!(
+            "SELECT user_id FROM tokens \
         WHERE token = $1 \
         AND expiration >= CAST(EXTRACT(epoch FROM CURRENT_TIMESTAMP) AS INTEGER)",
-        token,
+            token,
+        )
+        .fetch_one(&mut tx)
+        .await,
+        Uri::from_static("/login"),
+        "Not logged in".to_string(),
+        session_with_store
     )
-    .fetch_one(&mut tx)
-    .await
-    {
-        Ok(row) => row.user_id,
-        Err(_) => {
-            return Ok(error_redirect(
-                Uri::from_static("/login"),
-                "Not logged in".to_string(),
-                session_with_store,
-            ));
-        }
-    };
+    .user_id;
 
     if let Err(e) = sqlx::query!(
         r#"

@@ -147,6 +147,42 @@ pub fn error_redirect(
 }
 
 #[macro_export]
+macro_rules! parse_uri_or_error_html {
+    ( $destination_uri:expr, $templates:expr, $session:expr ) => {{
+        match $destination_uri.parse() {
+            Ok(uri) => uri,
+            Err(e) => {
+                return Ok(error_html(
+                    &format!("Error parsing URI: {}", e),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &$templates,
+                    $session,
+                ));
+            }
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! value_or_error_redirect_parse_uri {
+    ( $input:expr, $uri_to_parse:expr, $message:expr, $templates:expr, $session:expr ) => {{
+        match $input {
+            Ok(v) => v,
+            Err(e) => {
+                let destination_uri: warp::http::Uri =
+                    parse_uri_or_error_html!($uri_to_parse, $templates, $session);
+
+                return Ok(error_redirect(
+                    destination_uri,
+                    format!("{}: {}", $message, e),
+                    $session,
+                ));
+            }
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! value_or_error_redirect {
     ( $input:expr, $destination_uri:expr, $message:expr, $session:expr ) => {{
         match $input {
@@ -155,6 +191,23 @@ macro_rules! value_or_error_redirect {
                 return Ok(error_redirect(
                     $destination_uri,
                     format!("{}: {}", $message, e),
+                    $session,
+                ));
+            }
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! value_or_error_html {
+    ( $input:expr, $message:expr, $status_code:expr, $templates:expr, $session:expr ) => {{
+        match $input {
+            Ok(v) => v,
+            Err(e) => {
+                return Ok(error_html(
+                    &format!("{}: {}", $message, e),
+                    $status_code,
+                    &$templates,
                     $session,
                 ));
             }

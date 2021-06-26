@@ -15,15 +15,35 @@
         {{#if pages}}
           <h4>Pages you own</h4>
 
-          {{#each pages}}
-            <div>
-              <a href="/w/{{this.slug}}">{{this.title}}</a>
+          <table>
+            <thead>
+              <tr>
+                <th>Link</th>
+                <th>Edit</th>
+                <th>Delete</th>
+              </tr>
+            </thead>
 
-              <form action="/pages/delete/{{this.slug}}", method="post">
-                <input type="submit" value="Delete" />
-              </form>
-            </div>
-          {{/each}}
+            <tbody>
+              {{#each pages}}
+                <tr>
+                  <td>
+                    <a href="/w/{{this.slug}}">{{this.title}}</a>
+                  </td>
+
+                  <td>
+                    <a href="/pages/update/{{this.slug}}">Edit</a>
+                  </td>
+
+                  <td>
+                    <form action="/pages/delete/{{this.slug}}", method="post">
+                      <input type="submit" value="Delete" />
+                    </form>
+                  </td>
+                </tr>
+              {{/each}}
+            </tbody>
+          </table>
         {{else}}
           <p>No pages yet.</p>
         {{/if}}
@@ -31,17 +51,33 @@
         {{#if images}}
           <h4>Images you own</h4>
 
-          {{#each images}}
-            <div>
-              <img src="/img/{{this.slug_with_extension}}" alt="{{this.alt_text}}" />
+          <table>
+            <thead>
+              <tr>
+                <th>Image</th>
+                <th>Slug</th>
+                <th>Delete</th>
+              </tr>
+            </thead>
 
-              <p>Slug: /img/{{this.slug_with_extension}}</p>
+            <tbody>
+              {{#each images}}
+                <tr>
+                  <td>
+                    <img src="/img/{{this.slug_with_extension}}" alt="{{this.alt_text}}" />
+                  </td>
 
-              <form action="/images/delete/{{this.slug}}", method="post">
-                <input type="submit" value="Delete" />
-              </form>
-            </div>
-          {{/each}}
+                  <td>Slug: /img/{{this.slug_with_extension}}</td>
+
+                  <td>
+                    <form action="/images/delete/{{this.slug}}", method="post">
+                      <input type="submit" value="Delete" />
+                    </form>
+                  </td>
+                </tr>
+              {{/each}}
+            </tbody>
+          </table>
         {{else}}
           <p>No images yet.</p>
         {{/if}}

@@ -65,6 +65,7 @@ pub struct User {
 }
 
 pub enum UserState {
+    #[allow(dead_code)]
     Pending,
     Active,
     Rejected,

@@ -22,7 +22,7 @@ pub async fn render_create(
     templates: Handlebars<'_>,
     session_with_store: SessionWithStore<MemoryStore>,
 ) -> Result<HandlerReturn, warp::Rejection> {
-    let text = match templates.render("new_user", &json!({})) {
+    let text = match templates.render("users/create", &json!({})) {
         Ok(text) => text,
         Err(e) => {
             format!("<html>Error rendering new user template: {}</html>", e)
@@ -193,7 +193,7 @@ pub async fn render_login(
 ) -> Result<(impl warp::Reply, SessionWithStore<MemoryStore>), warp::Rejection> {
     let (flash, session_with_store) = get_and_clear_flash(session_with_store);
 
-    let text = match templates.render("login", &json!({ "flash": flash })) {
+    let text = match templates.render("users/login", &json!({ "flash": flash })) {
         Ok(text) => text,
         Err(e) => {
             format!("<html>Error: {}</html>", e)
@@ -451,7 +451,7 @@ pub async fn render(
     };
 
     let text = match templates.render(
-        "user",
+        "users/render",
         &json!({ "flash": flash, "pages": pages, "images": images, "approvals": approvals, "current_username": username}),
     ) {
         Ok(text) => text,

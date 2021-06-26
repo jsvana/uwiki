@@ -58,15 +58,15 @@ async fn main() -> Result<()> {
 
     let templates = vec![
         "index",
-        "login",
-        "wiki",
-        "edit",
         "error",
-        "create",
-        "upload_image",
-        "user",
-        "page_history",
-        "new_user",
+        "images/create",
+        "pages/render",
+        "pages/update",
+        "pages/create",
+        "pages/history",
+        "users/login",
+        "users/render",
+        "users/create",
     ];
     let mut handlebars = Handlebars::new();
 

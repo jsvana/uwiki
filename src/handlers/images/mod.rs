@@ -36,7 +36,7 @@ pub async fn render_create(
         ));
     }
 
-    let text = match templates.render("upload_image", &json!({ "flash": flash })) {
+    let text = match templates.render("images/create", &json!({ "flash": flash })) {
         Ok(text) => text,
         Err(e) => {
             format!("<html>Error rendering upload_image template: {}</html>", e)

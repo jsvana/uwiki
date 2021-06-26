@@ -33,7 +33,7 @@ pub async fn render_create(
         ));
     }
 
-    let text = match templates.render("create", &json!({ "flash": flash })) {
+    let text = match templates.render("pages/create", &json!({ "flash": flash })) {
         Ok(text) => text,
         Err(e) => {
             format!("<html>Error rendering create template: {}</html>", e)
@@ -230,7 +230,7 @@ pub async fn render(
     let current_username = get_current_username(&db, &session_with_store).await;
 
     let text = match templates.render(
-        "wiki",
+        "pages/render",
         &json!({ "title": title, "body": rendered_body, "slug": slug, "current_username": current_username, "flash": flash }),
     ) {
         Ok(text) => text,
@@ -366,7 +366,7 @@ pub async fn render_update(
     }
 
     let text = match templates.render(
-        "edit",
+        "pages/update",
         &json!({
             "slug": slug,
             "title": page.title.unwrap_or_else(|| "".to_string()),
@@ -739,7 +739,7 @@ pub async fn history(
     };
 
     let text = match templates.render(
-        "page_history",
+        "pages/history",
         &json!({ "slug": slug, "revisions": revisions }),
     ) {
         Ok(text) => text,
